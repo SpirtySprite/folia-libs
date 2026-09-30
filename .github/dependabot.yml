@@ -6,8 +6,18 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     ignore:
+      # These are compiled against but supplied by the server at runtime (scope "provided"), so they must
+      # track the versions the supported servers ship, not the newest release.
       - dependency-name: io.papermc.paper:paper-api
+      - dependency-name: io.netty:netty-all
+      - dependency-name: com.google.code.gson:gson
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # One pull request for all workflow action updates. Separate ones edit neighbouring lines of the same
+    # files and conflict with each other as soon as the first is merged.
+    groups:
+      actions:
+        patterns:
+          - "*"

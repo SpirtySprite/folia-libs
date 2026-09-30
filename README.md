@@ -205,7 +205,7 @@ Only genuinely-changed lines produce packets, so frequent updates never flicker.
 ### 3. Global provider — one description for everyone
 
 ```java
-board.setGlobalSidebar(SidebarProvider.of(
+board.boards().setGlobal(SidebarProvider.of(
     p -> mini("<aqua>MY SERVER"),
     p -> List.of(mini("<gray>Online: <green>" + Bukkit.getOnlinePlayers().size())),
     10));   // refresh every 10 ticks
@@ -217,7 +217,7 @@ player, refreshes it per player on the right thread, and cleans up on quit.
 ### 4. Global layout — same shape, per-player content
 
 ```java
-board.setGlobalSidebar(Layout.named("main", b -> b
+board.boards().setGlobal(Layout.named("main", b -> b
     .placeholders(true)
     .title("<aqua>MY SERVER")
     .line("<gray>Rank: <gold>%rank%")));
@@ -226,7 +226,7 @@ board.setGlobalSidebar(Layout.named("main", b -> b
 See [Layout profiles](#layout-profiles) for switching between several.
 
 > **One driver per board.** A global provider/layout yields automatically to any explicit
-> `createBoard(...).build()` or `applyLayout(...)` for that player, so they never fight.
+> `createBoard(...).build()` or `boards().applyLayout(...)` for that player, so they never fight.
 
 ---
 
@@ -247,11 +247,11 @@ Layout minigame = Layout.named("minigame", b -> b
     .title("<red><bold>SKYWARS</bold>")
     .line("<gray>Kills", NumberFormat.fixed(mini("<red>0"))));
 
-board.registerLayout(lobby).registerLayout(minigame);
+board.boards().registerLayout(lobby).registerLayout(minigame);
 
-board.applyLayout(player, "lobby");          // switch instantly, any time
-board.setWorldLayout("minigame_world", "minigame");  // auto-applied on join & world change
-board.unregisterLayout("minigame");          // remove a layout
+board.boards().applyLayout(player, "lobby");          // switch instantly, any time
+board.boards().worldLayout("minigame_world", "minigame");  // auto-applied on join & world change
+board.boards().unregisterLayout("minigame");          // remove a layout
 ```
 
 - Applying a layout **replaces** the previous board cleanly (no stale leftover lines).
@@ -301,19 +301,19 @@ The resolver runs per viewer on that viewer's thread; it starts from the global 
 Shared objectives that show a number below every player's name, or beside their tab-list entry.
 
 ```java
-board.belowName().title(mini("<red>❤")).score(player, 20);   // hearts below the name
-board.tabList().score(player, player.getPing());             // ping in the tab list
+board.objectives().belowName().title(mini("<red>❤")).score(player, 20);   // hearts below the name
+board.objectives().tabList().score(player, player.getPing());             // ping in the tab list
 
-board.belowName().remove(player.getName());                  // remove one entry
-board.belowName().hide();                                    // hide for everyone…
-board.belowName().show();                                    // …and bring it back
+board.objectives().belowName().remove(player.getName());                  // remove one entry
+board.objectives().belowName().hide();                                    // hide for everyone…
+board.objectives().belowName().show();                                    // …and bring it back
 ```
 
 ### Per-viewer numbers
 
 ```java
-board.tabList().scoreFor(viewer, target.getName(), value);   // only `viewer` sees this value
-board.tabList().removeFor(viewer, target.getName());         // revert to the shared value
+board.objectives().tabList().scoreFor(viewer, target.getName(), value);   // only `viewer` sees this value
+board.objectives().tabList().removeFor(viewer, target.getName());         // revert to the shared value
 ```
 
 Quit players are cleaned up automatically (no leaks, no phantom scores).
@@ -323,7 +323,7 @@ Quit players are cleaned up automatically (no leaks, no phantom scores).
 ## Tab-list header & footer
 
 ```java
-board.tabHeaderFooter(player,
+board.tabs().headerFooter(player,
     "<gradient:#00c6ff:#fff><bold>MY SERVER</bold></gradient>",
     "<gray>Online: <green>" + Bukkit.getOnlinePlayers().size());
 
@@ -338,38 +338,38 @@ Style how a player appears **in the tab list**, independently of their above-hea
 the list — **with no scoreboard team**, so it doesn't conflict with other team-based plugins.
 
 ```java
-board.tabName(player, "<aqua>★ <white>" + player.getName());  // tab prefix ≠ above-head prefix
-board.tabOrder(player, staff ? 100 : 0);                      // higher sorts higher (Paper 1.21.2+)
+board.tabs().name(player, "<aqua>★ <white>" + player.getName());  // tab prefix ≠ above-head prefix
+board.tabs().order(player, staff ? 100 : 0);                      // higher sorts higher (Paper 1.21.2+)
 board.resetTabName(player);                                    // back to the vanilla name
 
-if (!board.tabOrderSupported()) { /* pre-1.21.2: use nametag tabSort instead */ }
+if (!board.tabs().orderSupported()) { /* pre-1.21.2: use nametag tabSort instead */ }
 ```
 
 - **Tab vs. above-head are now separate.** The above-head prefix comes from a [nametag](#nametags)
-  (a team); the tab prefix comes from `tabName(...)` (no team). Use either or both.
-- **Flicker-free, dynamic sorting.** `tabOrder(...)` changes instantly with no team-name trick.
+  (a team); the tab prefix comes from `tabs().name(...)` (no team). Use either or both.
+- **Flicker-free, dynamic sorting.** `tabs().order(...)` changes instantly with no team-name trick.
   (On 1.21.1 and older, fall back to nametag `tabSort`.)
 - **Team-conflict friendly.** Because tab styling needs no team, a server that already runs a
   team-based nametag/prefix plugin can use FoliaBoard purely for the tab list (and sidebars) without
   fighting over teams. Above-head prefixes still require a team — that's a vanilla limitation — so
   simply don't create FoliaBoard nametags if another plugin owns the above-head text.
 
-`tabName`/`tabOrder` are per-target (shown the same to everyone), built on stable Paper API.
+`tabs().name`/`tabs().order` are per-target (shown the same to everyone), built on stable Paper API.
 
 ### Per-viewer tab names
 
 To show a target a *different* tab name to *different* viewers, use the packet-level API:
 
 ```java
-if (board.perViewerTabSupported()) {                 // 1.20.6+ with the player-info packet
-    board.tabNameFor(viewer, target, "<red>ENEMY " + target.getName());
+if (board.tabs().perViewerSupported()) {                 // 1.20.6+ with the player-info packet
+    board.tabs().nameFor(viewer, target, "<red>ENEMY " + target.getName());
     board.resetTabNameFor(viewer, target);           // back to default
 }
 ```
 
 This is a **manual** send (no automatic lifecycle): re-apply it when you need it, e.g. on the
 viewer's join or after the server resends player info. It's built on `ClientboundPlayerInfoUpdatePacket`
-and **fails safe** — if the server build doesn't support it, `perViewerTabSupported()` returns false
+and **fails safe** — if the server build doesn't support it, `tabs().perViewerSupported()` returns false
 and the calls no-op rather than erroring.
 
 ### Managed tab list
@@ -392,12 +392,12 @@ For everyone at once, set a global layout. It is applied to online players immed
 player who joins later, and closed on quit:
 
 ```java
-board.setGlobalTab(TabLayout.of(tab -> tab
+board.tabs().setGlobal(TabLayout.of(tab -> tab
         .placeholders(true)
         .header("&5&lNEXUS")
         .footer("<gray>%online% online")
         .name(p -> (p.isOp() ? "<red>" : "<white>") + p.getName())));
-board.clearGlobalTab();
+board.tabs().clearGlobal();
 ```
 
 `resetOnClose(true)` (the default) clears the header, footer and name when the tab closes.
@@ -419,7 +419,7 @@ board.bossBar(player, "double-xp")
      .hideAfter(20 * 60 * 5)
      .show();
 
-board.hideBossBar(player, "double-xp");
+board.bossBars().hide(player, "double-xp");
 ```
 
 Progress is clamped to 0..1 (NaN becomes 0). Bars are hidden automatically when the player quits.
@@ -542,7 +542,7 @@ Every `String` argument across the API goes through MiniMessage, so you rarely n
 **Line processor** — rewrite every line/title of every board just before it's sent:
 
 ```java
-board.addLineProcessor((viewer, index, line) ->
+board.boards().addLineProcessor((viewer, index, line) ->
     index == LineProcessor.TITLE ? line
         : line.decoration(TextDecoration.ITALIC, false));   // e.g. kill stray italics
 ```
@@ -634,13 +634,13 @@ Optionally persist which layout a player was on, so it's re-applied on their nex
 join-listener glue. Back the store with anything (a map, a config, a database, a storage plugin):
 
 ```java
-board.setLayoutStore(new LayoutStore() {
+board.boards().layoutStore(new LayoutStore() {
     public CompletableFuture<Void> remember(UUID player, String layout) { return db.putAsync(player, layout); }
     public CompletableFuture<String> lastLayout(UUID player) { return db.getAsync(player); }
 });
 ```
 
-When set, `applyLayout(...)` records the layout name, and FoliaBoard re-applies it on join (unless a
+When set, `boards().applyLayout(...)` records the layout name, and FoliaBoard re-applies it on join (unless a
 global or per-world layout already drives that player's board).
 
 ---
@@ -660,7 +660,12 @@ global or per-world layout already drives that player's board).
 
 | Type | Key members |
 |---|---|
-| `FoliaBoard` | `create(plugin)`, `tab(p)`, `setGlobalTab/clearGlobalTab`, `bossBar(p, id)`, `hideBossBar`, `createBoard(p)`, `createNametag(p)`, `sidebar(p)`, `removeSidebar(p)`, `setGlobalSidebar(provider\|layout)`, `clearGlobalSidebar()`, `registerLayout/unregisterLayout/layout/applyLayout`, `setWorldLayout/clearWorldLayout`, `setLayoutStore`, `nametag(p)`, `belowName()`, `tabList()`, `tabName/resetTabName/tabOrder`, `tabNameFor/resetTabNameFor/perViewerTabSupported`, `tabHeaderFooter/clearTabHeaderFooter`, `addLineProcessor`, `placeholders()`, `stats()`, `close()` |
+| `FoliaBoard` | `create(plugin)`, `boards()`, `tabs()`, `bossBars()`, `nametags()`, `objectives()`, and the shortcuts `createBoard(p)`, `sidebar(p)`, `createNametag(p)`, `nametag(p)`, `tab(p)`, `bossBar(p, id)`, plus `placeholders()`, `stats()`, `close()` |
+| `Boards` | `create(p)`, `sidebar(p)`, `sidebarIfPresent(p)`, `remove(p)`, `setGlobal(provider\|layout)`, `clearGlobal()`, `registerLayout/unregisterLayout/layout`, `applyLayout(p, name\|layout)`, `worldLayout/clearWorldLayout`, `layoutStore`, `addLineProcessor/removeLineProcessor` |
+| `Tabs` | `builder(p)`, `get(p)`, `remove(p)`, `setGlobal(layout)`, `clearGlobal()`, `name/resetName/order/orderSupported`, `nameFor/resetNameFor/perViewerSupported`, `headerFooter/clearHeaderFooter` |
+| `BossBars` | `builder(p, id)`, `get(p, id)`, `hide(p, id)` |
+| `Nametags` | `builder(p)`, `get(p)`, `getIfPresent(p)` |
+| `Objectives` | `belowName()`, `tabList()` |
 | `ScoreboardAPI` | `init(plugin)`, `get()`, `shutdown()`, `createBoard(p)`, `createNametag(p)`, `sidebar(p)` |
 | `BoardBuilder` | `placeholders(bool)`, `refreshEvery(ticks)`, `title(...)`, `line(...)`, `lineIf(...)`, `lines(...)`, `blankLine()`, `build()` |
 | `TabBuilder` / `TabList` / `TabLayout` | `header`, `footer`, `name`, `order`, `orderByPermission`, `placeholders`, `refreshEvery`, `resetOnClose`, `build()`, `refresh()`, `close()` |

@@ -1,6 +1,7 @@
 package net.foliaboard.api;
 
-import net.foliaboard.FoliaBoard;
+import net.foliaboard.internal.service.TabService;
+import org.jetbrains.annotations.ApiStatus;
 import net.foliaboard.internal.tab.TabImpl;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -10,7 +11,7 @@ import java.util.function.Function;
 import java.util.function.ToIntFunction;
 
 public final class TabBuilder {
-    private final FoliaBoard board;
+    private final TabService board;
     private final Player player;
     private Function<Player, String> header;
     private Function<Player, String> footer;
@@ -20,7 +21,8 @@ public final class TabBuilder {
     private int refreshTicks = -1;
     private boolean resetOnClose = true;
 
-    public TabBuilder(@NotNull FoliaBoard board, @NotNull Player player) {
+    @ApiStatus.Internal
+    public TabBuilder(@NotNull TabService board, @NotNull Player player) {
         this.board = board;
         this.player = player;
     }
@@ -102,9 +104,9 @@ public final class TabBuilder {
     }
 
     public @NotNull TabList build() {
-        TabImpl tab = new TabImpl(board.plugin(), board.placeholders(), player,
+        TabImpl tab = new TabImpl(board.runtime().plugin(), board.runtime().placeholders(), player,
                 new TabImpl.Spec(header, footer, name, order, placeholders, refreshTicks, resetOnClose));
-        board.trackTab(player, tab);
+        board.track(player, tab);
         tab.start();
         return tab;
     }

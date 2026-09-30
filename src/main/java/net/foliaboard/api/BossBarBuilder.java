@@ -1,6 +1,7 @@
 package net.foliaboard.api;
 
-import net.foliaboard.FoliaBoard;
+import net.foliaboard.internal.service.BossBarService;
+import org.jetbrains.annotations.ApiStatus;
 import net.foliaboard.internal.bossbar.ManagedBossBarImpl;
 import net.kyori.adventure.bossbar.BossBar;
 import org.bukkit.entity.Player;
@@ -10,7 +11,7 @@ import java.util.function.Function;
 import java.util.function.ToDoubleFunction;
 
 public final class BossBarBuilder {
-    private final FoliaBoard board;
+    private final BossBarService board;
     private final Player player;
     private final String id;
     private Function<Player, String> text = viewer -> "";
@@ -21,7 +22,8 @@ public final class BossBarBuilder {
     private int refreshTicks = -1;
     private long lifetimeTicks = -1L;
 
-    public BossBarBuilder(@NotNull FoliaBoard board, @NotNull Player player, @NotNull String id) {
+    @ApiStatus.Internal
+    public BossBarBuilder(@NotNull BossBarService board, @NotNull Player player, @NotNull String id) {
         this.board = board;
         this.player = player;
         this.id = id;
@@ -79,10 +81,10 @@ public final class BossBarBuilder {
     }
 
     public @NotNull ManagedBossBar show() {
-        ManagedBossBarImpl bar = new ManagedBossBarImpl(board.plugin(), board.placeholders(), player, id,
+        ManagedBossBarImpl bar = new ManagedBossBarImpl(board.runtime().plugin(), board.runtime().placeholders(), player, id,
                 new ManagedBossBarImpl.Spec(text, progress, color, overlay, placeholders, refreshTicks, lifetimeTicks),
-                board::forgetBossBar);
-        board.trackBossBar(player, id, bar);
+                board::forget);
+        board.track(player, id, bar);
         bar.start();
         return bar;
     }

@@ -1,6 +1,6 @@
 package net.foliaboard.internal.listener;
 
-import net.foliaboard.FoliaBoard;
+import net.foliaboard.internal.service.BoardLifecycle;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -9,24 +9,24 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 public final class FoliaBoardListener implements Listener {
-    private final FoliaBoard foliaBoard;
+    private final BoardLifecycle lifecycle;
 
-    public FoliaBoardListener(FoliaBoard foliaBoard) {
-        this.foliaBoard = foliaBoard;
+    public FoliaBoardListener(BoardLifecycle lifecycle) {
+        this.lifecycle = lifecycle;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
-        foliaBoard.handleJoin(event.getPlayer());
+        lifecycle.onJoin(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onWorldChange(PlayerChangedWorldEvent event) {
-        foliaBoard.handleWorldChange(event.getPlayer());
+        lifecycle.onWorldChange(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
-        foliaBoard.handleQuit(event.getPlayer());
+        lifecycle.onQuit(event.getPlayer());
     }
 }

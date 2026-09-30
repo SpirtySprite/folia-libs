@@ -1,6 +1,7 @@
 package net.foliaboard.api;
 
-import net.foliaboard.FoliaBoard;
+import net.foliaboard.internal.service.NametagService;
+import org.jetbrains.annotations.ApiStatus;
 import net.foliaboard.api.text.Text;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.ComponentLike;
@@ -10,7 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public final class NametagBuilder {
-    private final FoliaBoard board;
+    private final NametagService board;
     private final Player target;
 
     private Component prefix = Component.empty();
@@ -21,7 +22,8 @@ public final class NametagBuilder {
     private @Nullable Integer tabSort;
     private @Nullable NametagResolver viewerResolver;
 
-    public NametagBuilder(@NotNull FoliaBoard board, @NotNull Player target) {
+    @ApiStatus.Internal
+    public NametagBuilder(@NotNull NametagService board, @NotNull Player target) {
         this.board = board;
         this.target = target;
     }
@@ -72,7 +74,7 @@ public final class NametagBuilder {
     }
 
     public @NotNull Nametag apply() {
-        Nametag nametag = board.nametagInternal(target, tabSort);
+        Nametag nametag = board.prepare(target, tabSort);
         nametag.prefix(prefix)
                 .suffix(suffix)
                 .color(color)

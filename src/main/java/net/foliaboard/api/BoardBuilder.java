@@ -1,6 +1,7 @@
 package net.foliaboard.api;
 
-import net.foliaboard.FoliaBoard;
+import net.foliaboard.internal.service.SidebarService;
+import org.jetbrains.annotations.ApiStatus;
 import net.foliaboard.api.animation.Animation;
 import net.foliaboard.api.format.NumberFormat;
 import net.foliaboard.api.text.Legacy;
@@ -26,7 +27,7 @@ public final class BoardBuilder {
     private static final int ANIMATION_REFRESH_TICKS = 3;
     private static final int PLACEHOLDER_REFRESH_TICKS = 20;
 
-    private final FoliaBoard board;
+    private final SidebarService board;
     private final Player player;
 
     private Function<Player, Component> titleRenderer = p -> Component.empty();
@@ -38,7 +39,8 @@ public final class BoardBuilder {
     private boolean parsePlaceholders = false;
     private int refreshTicks = -1;
 
-    public BoardBuilder(@NotNull FoliaBoard board, @NotNull Player player) {
+    @ApiStatus.Internal
+    public BoardBuilder(@NotNull SidebarService board, @NotNull Player player) {
         this.board = board;
         this.player = player;
     }
@@ -170,7 +172,7 @@ public final class BoardBuilder {
         int maxIndex = lines.isEmpty() ? -1 : lines.lastKey();
         boolean dynamic = titleDynamic || lines.values().stream().anyMatch(LineSpec::dynamic);
         Runnable apply = () -> paint(sidebar, maxIndex);
-        Schedulers.onEntity(board.plugin(), player, apply);
+        Schedulers.onEntity(board.runtime().plugin(), player, apply);
         if (dynamic) {
             scheduleRefresh(sidebar, apply);
         } else {
@@ -204,7 +206,7 @@ public final class BoardBuilder {
     private void scheduleRefresh(Sidebar sidebar, Runnable apply) {
         int interval = refreshTicks > 0 ? refreshTicks
                 : animated ? ANIMATION_REFRESH_TICKS : PLACEHOLDER_REFRESH_TICKS;
-        Schedulers.ScheduledHandle handle = Schedulers.entityTimer(board.plugin(), player, h -> {
+        Schedulers.ScheduledHandle handle = Schedulers.entityTimer(board.runtime().plugin(), player, h -> {
             if (sidebar.closed() || !player.isOnline()) {
                 h.cancel();
                 return;
@@ -233,7 +235,7 @@ public final class BoardBuilder {
         }
         String template = Legacy.toMini(raw);
         if (parsePlaceholders && template.indexOf('%') >= 0) {
-            template = board.placeholders().resolveForMiniMessage(viewer, template);
+            template = board.runtime().placeholders().resolveForMiniMessage(viewer, template);
         }
         return Text.cached(template);
     }
@@ -249,7 +251,7 @@ public final class BoardBuilder {
 
         @Override
         public Component apply(Player player) {
-            String resolved = board.placeholders().resolveForMiniMessage(player, raw);
+            String resolved = board.runtime().placeholders().resolveForMiniMessage(player, raw);
             if (!resolved.equals(lastResolved)) {
                 lastResolved = resolved;
                 lastComponent = Text.mini(resolved);

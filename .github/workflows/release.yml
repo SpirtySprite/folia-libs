@@ -38,6 +38,12 @@ jobs:
           fi
       - name: Build and test
         run: mvn -B -ntp verify -pl "${MODULE}" -am
+      - name: Create the software bill of materials and checksums
+        run: |
+          mvn -B -ntp org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeBom -pl "${MODULE}" \
+            -DoutputFormat=json -DincludeProvidedScope=false -DincludeTestScope=false
+          cp "${MODULE}/target/bom.json" "${MODULE}/target/${MODULE}-${VERSION}-sbom.json"
+          (cd "${MODULE}/target" && sha256sum *.jar > SHA256SUMS.txt)
       - name: Extract release notes from the module's CHANGELOG.md
         run: |
           awk -v v="${VERSION}" '
@@ -52,3 +58,5 @@ jobs:
           body_path: release-notes.md
           files: |
             ${{ env.MODULE }}/target/*.jar
+            ${{ env.MODULE }}/target/*-sbom.json
+            ${{ env.MODULE }}/target/SHA256SUMS.txt

@@ -30,7 +30,7 @@ jobs:
       - run: mvn -B -ntp verify -Dpaper.version=${{ matrix.paper }} -pl '!foliagui'
       - name: Upload coverage reports
         if: matrix.paper == '1.21.4-R0.1-SNAPSHOT'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jacoco-reports
           path: '*/target/site/jacoco'

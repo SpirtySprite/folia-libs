@@ -21,7 +21,7 @@
     <properties>
         <!-- FoliaGUI's benchmarks run against MockBukkit, which targets this Paper version. -->
         <paper.version>1.21.11-R0.1-SNAPSHOT</paper.version>
-        <mockbukkit.version>4.110.0</mockbukkit.version>
+        <mockbukkit.version>4.116.3</mockbukkit.version>
         <jmh.version>1.37</jmh.version>
         <maven.source.skip>true</maven.source.skip>
         <maven.javadoc.skip>true</maven.javadoc.skip>

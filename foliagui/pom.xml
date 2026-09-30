@@ -26,13 +26,6 @@
         <mockbukkit.version>4.116.3</mockbukkit.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
-        </repository>
-    </repositories>
-
     <dependencies>
         <dependency>
             <groupId>net.foliacommons</groupId>
@@ -57,8 +50,8 @@
         <!-- Test-only: a fake Bukkit server so GUI code (item meta, inventories, click events) can run
              in a plain unit test without a real Paper server. -->
         <dependency>
-            <groupId>com.github.MockBukkit</groupId>
-            <artifactId>MockBukkit</artifactId>
+            <groupId>org.mockbukkit.mockbukkit</groupId>
+            <artifactId>mockbukkit-v1.21</artifactId>
             <version>${mockbukkit.version}</version>
             <scope>test</scope>
         </dependency>

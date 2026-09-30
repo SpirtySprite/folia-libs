@@ -88,11 +88,14 @@ with **zero locks**, and it's all hidden. You describe *what* to show; FoliaBoar
 	</repositories>
 
 	<dependency>
-	    <groupId>com.github.SpirtySprite</groupId>
-	    <artifactId>FoliaBoard-API</artifactId>
-	    <version>1.0.0</version>
+	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
+	    <artifactId>foliaboard-core</artifactId>
+	    <version>foliaboard-v1.0.0</version>
 	</dependency>
 ```
+
+The library depends on `folia-commons` (`net.foliacommons:folia-commons`), which Maven pulls in for you. Shade
+both into your plugin and relocate ``net.foliaboard`` and `net.foliacommons` to packages of your own.
 
 **2. Mark your plugin Folia-ready** — required or it won't load on Folia:
 
@@ -699,15 +702,14 @@ global or per-world layout already drives that player's board).
 
 ## Building from source
 
+From the root of the repository:
+
 ```bash
-mvn clean package
+mvn verify -pl foliaboard -am
 ```
 
-- `foliaboard-core/target/foliaboard-core-1.0.0.jar` — the library (depend on this).
-- `foliaboard-demo/target/FoliaBoard-1.0.0.jar` — a standalone demo plugin. Drop it into `plugins/`,
-  join, and use `/fbdemo lobby|minigame` to see everything at once. Add `-Dfoliaboard.debug=true` to
-  log every scoreboard packet.
+This builds `folia-commons` (which FoliaBoard depends on) and FoliaBoard, runs the tests, and produces
+`foliaboard/target/foliaboard-core-<version>.jar` together with the sources and javadoc jars. FoliaBoard
+ships no `plugin.yml`; it is a library you shade into your own plugin.
 
-See [`foliaboard-demo/.../ExamplePlugin.java`](foliaboard-demo/src/main/java/net/foliaboard/example/ExamplePlugin.java)
-for a complete, runnable example.
-#
+Add `-Dfoliaboard.debug=true` to the server's JVM arguments to log every scoreboard packet.

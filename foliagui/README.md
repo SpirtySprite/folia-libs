@@ -63,11 +63,14 @@ Every operation that touches an inventory (open, close, update, title change, an
 	</repositories>
 
 	<dependency>
-	    <groupId>com.github.SpirtySprite</groupId>
-	    <artifactId>FoliaGUI-API</artifactId>
-	    <version>1.0.0</version>
+	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
+	    <artifactId>foliagui-api</artifactId>
+	    <version>foliagui-v1.0.0</version>
 	</dependency>
 ```
+
+The library depends on `folia-commons` (`net.foliacommons:folia-commons`), which Maven pulls in for you. Shade
+both into your plugin and relocate ``com.foliagui`` and `net.foliacommons` to packages of your own.
 
 **2. Mark your plugin Folia-ready** — required or it won't load on Folia:
 
@@ -866,12 +869,16 @@ mvn test
 
 ## Building from source
 
+From the root of the repository:
+
 ```bash
-mvn clean install
+mvn verify -pl foliagui -am
 ```
 
-This compiles the library, runs the test suite, and installs the jar (plus sources and javadoc jars) to your local Maven repository.
+This builds `folia-commons` (which FoliaGUI depends on) and FoliaGUI, runs the test suite, and produces the jar
+plus sources and javadoc jars in `foliagui/target/`. Use `install` instead of `verify` to put them in your local
+Maven repository.
 
 ## License
 
-Do whatever you want with it.
+MIT. See the [LICENSE](../LICENSE) at the root of the repository.

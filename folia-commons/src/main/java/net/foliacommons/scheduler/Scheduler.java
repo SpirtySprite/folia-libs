@@ -1,5 +1,6 @@
 package net.foliacommons.scheduler;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
@@ -7,7 +8,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Runs work on the right thread on both Folia and Paper.
@@ -47,6 +50,55 @@ public interface Scheduler {
         DeferredHandle handle = new DeferredHandle();
         handle.bind(runForEntityTimer(entity, () -> task.accept(handle), retired, initialDelayTicks, periodTicks));
         return handle;
+    }
+
+    /**
+     * Runs {@code task} right now if the current thread already owns {@code entity}, otherwise hands it
+     * to the entity's thread. Use it to avoid a needless one-tick delay.
+     *
+     * @return false if the task could not be scheduled
+     */
+    default boolean ensureForEntity(@NotNull Entity entity, @NotNull Runnable task, @Nullable Runnable retired) {
+        if (Bukkit.getServer().isOwnedByCurrentRegion(entity)) {
+            task.run();
+            return true;
+        }
+        return runForEntity(entity, task, retired);
+    }
+
+    /**
+     * Runs {@code task} on the entity's thread and delivers its result as a future, so callers on
+     * other threads can chain on it. The future fails with a {@link SchedulingException} if the task
+     * could not run because the plugin is disabled or the entity was removed, and with the task's own
+     * exception if it throws.
+     */
+    default <T> @NotNull CompletableFuture<T> callForEntity(@NotNull Entity entity, @NotNull Supplier<T> task) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        Runnable retired = () -> future.completeExceptionally(
+                new SchedulingException("The entity was removed before the task could run"));
+        boolean scheduled = runForEntity(entity, () -> complete(future, task), retired);
+        if (!scheduled) {
+            future.completeExceptionally(new SchedulingException(
+                    "The task could not be scheduled (the plugin is disabled or the entity was removed)"));
+        }
+        return future;
+    }
+
+    /** Like {@link #callForEntity} for the global region thread. */
+    default <T> @NotNull CompletableFuture<T> callGlobal(@NotNull Supplier<T> task) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        if (!runGlobal(() -> complete(future, task))) {
+            future.completeExceptionally(new SchedulingException("The task could not be scheduled (the plugin is disabled)"));
+        }
+        return future;
+    }
+
+    private static <T> void complete(CompletableFuture<T> future, Supplier<T> task) {
+        try {
+            future.complete(task.get());
+        } catch (Throwable failure) {
+            future.completeExceptionally(failure);
+        }
     }
 
     /** Runs {@code task} on the thread that owns the region containing {@code location}. */

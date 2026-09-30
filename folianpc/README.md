@@ -88,11 +88,14 @@ entities.
 	</repositories>
 
 	<dependency>
-	    <groupId>com.github.SpirtySprite</groupId>
-	    <artifactId>FoliaNPC-API</artifactId>
-	    <version>1.1.1</version>
+	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
+	    <artifactId>folianpc</artifactId>
+	    <version>folianpc-v1.1.1</version>
 	</dependency>
 ```
+
+The library depends on `folia-commons` (`net.foliacommons:folia-commons`), which Maven pulls in for you. Shade
+both into your plugin and relocate ``net.folianpc`` and `net.foliacommons` to packages of your own.
 
 **2. Mark your plugin Folia-ready** — required or it won't load on Folia:
 
@@ -1074,8 +1077,10 @@ which outlive the reload and accumulate with each subsequent one.
 
 ## Building
 
+From the root of the repository:
+
 ```bash
-mvn package
+mvn verify -pl folianpc -am
 ```
 
 Produces a plain library jar with no plugin descriptor, and runs the full unit test suite as part of the

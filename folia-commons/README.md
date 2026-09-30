@@ -19,6 +19,18 @@ scheduler.runGlobal(() -> Bukkit.broadcast(Component.text("Global region")));
 scheduler.runAsync(() -> saveToDatabase());
 ```
 
+Need the result on another thread? `callForEntity` and `callGlobal` return a `CompletableFuture`:
+
+```java
+scheduler.callForEntity(player, () -> player.getHealth())
+         .thenAccept(health -> getLogger().info("Health: " + health));
+```
+
+The future fails with a `SchedulingException` if the task could not run because the plugin is disabled or the
+player left, and with your own exception if the task throws, so nothing ever hangs. `ensureForEntity` runs
+the task immediately when the current thread already owns the player and only schedules when it does not.
+`repeatForEntity` is a repeating task that receives a handle so it can cancel itself.
+
 Nothing is scheduled once the plugin is disabled. One-shot methods return `false` and timers return
 `TaskHandle.NOOP`, so shutdown paths do not throw.
 

@@ -1,6 +1,6 @@
 package net.foliaboard.api.placeholder;
 
-import net.foliaboard.api.text.Legacy;
+import net.foliacommons.text.Legacy;
 import net.foliaboard.api.text.Text;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;

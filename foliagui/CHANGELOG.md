@@ -7,6 +7,10 @@ All notable changes to FoliaGUI are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Depends on folia-commons (`net.foliacommons:folia-commons`) for scheduling, server version detection and
+  legacy colour conversion. Shade and relocate it together with this library.
+- `PaperFoliaScheduler` is now backed by the folia-commons scheduler, so a plugin being disabled in the middle
+  of a scheduling call no longer throws.
 - Runtime state is no longer process-wide. A `FoliaGUIService` (create one with `FoliaGUI.create(plugin)`)
   owns the open-GUI registry, navigation history, anvil/sign/merchant/chat sessions, theme and listener.
   `FoliaGUI.init` still creates a default service and all existing static helpers keep working on it.
@@ -17,6 +21,9 @@ All notable changes to FoliaGUI are documented here. The format follows
 - The item identity tag uses the fixed key `foliagui:item` instead of a key namespaced by the owning plugin.
 - Internal `handleClick`/`handleClose`/`handleDrag`/`handleSignChange`/`handleQuit` methods on `AnvilGui`,
   `MerchantGui` and `SignGui` now take the service as their first argument. They are `@ApiStatus.Internal`.
+
+### Deprecated
+- `com.foliagui.util.Legacy`. Use `net.foliacommons.text.Legacy`.
 
 ### Removed
 - `GuiManager.register` and `GuiManager.unregister` (internal, now on `GuiRegistry`).

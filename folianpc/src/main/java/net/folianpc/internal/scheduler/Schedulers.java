@@ -1,9 +1,12 @@
 package net.folianpc.internal.scheduler;
 
-import org.bukkit.Bukkit;
+import net.foliacommons.scheduler.Scheduler;
+import net.foliacommons.scheduler.TaskHandle;
+import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
 
+/** FoliaNPC's view of the scheduler from folia-commons. */
 public final class Schedulers {
 
     private static volatile boolean synchronousForTesting;
@@ -23,65 +26,53 @@ public final class Schedulers {
         void cancel();
     }
 
-    public static void onEntity(Plugin plugin, Entity entity, Runnable task) {
+    private static Scheduler scheduler(Plugin plugin) {
         if (synchronousForTesting) {
-            task.run();
-            return;
+            return Scheduler.synchronous();
         }
-        if (plugin == null || !plugin.isEnabled()) {
-            return;
-        }
-        try {
-            entity.getScheduler().run(plugin, scheduled -> task.run(), null);
-        } catch (Throwable ignored) {
+        return plugin == null ? null : Scheduler.forPlugin(plugin);
+    }
+
+    public static void onEntity(Plugin plugin, Entity entity, Runnable task) {
+        Scheduler scheduler = scheduler(plugin);
+        if (scheduler != null) {
+            scheduler.runForEntity(entity, task, null);
         }
     }
 
     public static void onEntityLater(Plugin plugin, Entity entity, Runnable task, long delayTicks) {
-        if (delayTicks <= 0 || synchronousForTesting) {
-            onEntity(plugin, entity, task);
+        Scheduler scheduler = scheduler(plugin);
+        if (scheduler == null) {
             return;
         }
-        if (plugin == null || !plugin.isEnabled()) {
-            return;
-        }
-        try {
-            entity.getScheduler().runDelayed(plugin, scheduled -> task.run(), null, delayTicks);
-        } catch (Throwable ignored) {
+        if (delayTicks <= 0) {
+            scheduler.runForEntity(entity, task, null);
+        } else {
+            scheduler.runForEntityLater(entity, task, null, delayTicks);
         }
     }
 
     public static void global(Plugin plugin, Runnable task) {
-        if (synchronousForTesting) {
-            task.run();
-            return;
+        Scheduler scheduler = scheduler(plugin);
+        if (scheduler != null) {
+            scheduler.runGlobal(task);
         }
-        if (plugin == null || !plugin.isEnabled()) {
-            return;
-        }
-        Bukkit.getGlobalRegionScheduler().execute(plugin, task);
     }
 
-    public static void onRegion(Plugin plugin, org.bukkit.Location location, Runnable task) {
-        if (synchronousForTesting) {
-            task.run();
-            return;
+    public static void onRegion(Plugin plugin, Location location, Runnable task) {
+        Scheduler scheduler = scheduler(plugin);
+        if (scheduler != null) {
+            scheduler.runForLocation(location, task);
         }
-        if (plugin == null || !plugin.isEnabled()) {
-            return;
-        }
-        Bukkit.getRegionScheduler().execute(plugin, location, task);
     }
 
     public static Handle globalTimer(Plugin plugin, Runnable task, long initialDelayTicks, long periodTicks) {
-        if (synchronousForTesting) {
+        Scheduler scheduler = scheduler(plugin);
+        if (scheduler == null) {
             return () -> {
             };
         }
-        long delay = Math.max(1L, initialDelayTicks);
-        long period = Math.max(1L, periodTicks);
-        var scheduled = Bukkit.getGlobalRegionScheduler()
-                .runAtFixedRate(plugin, t -> task.run(), delay, period);
-        return scheduled::cancel;
+        TaskHandle handle = scheduler.runGlobalTimer(task, initialDelayTicks, periodTicks);
+        return handle::cancel;
     }
 }

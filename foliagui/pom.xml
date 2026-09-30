@@ -34,6 +34,11 @@
     </repositories>
 
     <dependencies>
+        <dependency>
+            <groupId>net.foliacommons</groupId>
+            <artifactId>folia-commons</artifactId>
+            <version>${folia-commons.version}</version>
+        </dependency>
         <!-- Paper API bundles the Folia region-scheduler interfaces + Adventure. Provided at runtime. -->
         <dependency>
             <groupId>io.papermc.paper</groupId>

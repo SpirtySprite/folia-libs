@@ -1,118 +1,56 @@
 package net.foliaboard.internal.scheduler;
 
-import org.bukkit.Bukkit;
+import net.foliacommons.FoliaEnvironment;
+import net.foliacommons.scheduler.Scheduler;
+import net.foliacommons.scheduler.TaskHandle;
 import org.bukkit.entity.Entity;
-import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+/** FoliaBoard's view of the scheduler from folia-commons. */
 public final class Schedulers {
-    private static final boolean FOLIA = detectFolia();
+    private static volatile boolean synchronousForTesting = false;
 
     private Schedulers() {
     }
 
-    private static boolean detectFolia() {
-        try {
-            Class.forName("io.papermc.paper.threadedregions.RegionizedServer");
-            return true;
-        } catch (ClassNotFoundException ignored) {
-            return false;
-        }
-    }
-
     public static boolean isFolia() {
-        return FOLIA;
+        return FoliaEnvironment.isFolia();
     }
-
-    private static volatile boolean synchronousForTesting = false;
 
     public static void setSynchronousForTesting(boolean value) {
         synchronousForTesting = value;
     }
 
+    private static Scheduler scheduler(Plugin plugin) {
+        return synchronousForTesting ? Scheduler.synchronous() : Scheduler.forPlugin(plugin);
+    }
+
     public static @NotNull ScheduledHandle globalTimer(@NotNull Plugin plugin, @NotNull Runnable task,
                                                        long delayTicks, long periodTicks) {
-        if (!plugin.isEnabled()) {
-            return () -> {
-            };
-        }
-        long delay = Math.max(1, delayTicks);
-        long period = Math.max(1, periodTicks);
-        try {
-            var handle = Bukkit.getGlobalRegionScheduler()
-                    .runAtFixedRate(plugin, scheduledTask -> task.run(), delay, period);
-            return handle::cancel;
-        } catch (IllegalPluginAccessException disabledMidCall) {
-            return () -> {
-            };
-        }
+        TaskHandle handle = scheduler(plugin).runGlobalTimer(task, delayTicks, periodTicks);
+        return handle::cancel;
     }
 
     public static void async(@NotNull Plugin plugin, @NotNull Runnable task) {
-        if (synchronousForTesting) {
-            task.run();
-            return;
-        }
-        if (!plugin.isEnabled()) {
-            return;
-        }
-        try {
-            Bukkit.getAsyncScheduler().runNow(plugin, scheduledTask -> task.run());
-        } catch (IllegalPluginAccessException ignored) {
-        }
+        scheduler(plugin).runAsync(task);
     }
 
     public static void asyncLater(@NotNull Plugin plugin, @NotNull Runnable task, @NotNull Duration delay) {
-        if (synchronousForTesting) {
-            task.run();
-            return;
-        }
-        if (!plugin.isEnabled()) {
-            return;
-        }
-        try {
-            Bukkit.getAsyncScheduler().runDelayed(plugin, scheduledTask -> task.run(),
-                    Math.max(1, delay.toMillis()), TimeUnit.MILLISECONDS);
-        } catch (IllegalPluginAccessException ignored) {
-        }
+        scheduler(plugin).runAsyncLater(task, delay);
     }
 
     public static void global(@NotNull Plugin plugin, @NotNull Runnable task) {
-        if (synchronousForTesting) {
-            task.run();
-            return;
-        }
-        if (!plugin.isEnabled()) {
-            return;
-        }
-        try {
-            Bukkit.getGlobalRegionScheduler().run(plugin, scheduledTask -> task.run());
-        } catch (IllegalPluginAccessException ignored) {
-        }
+        scheduler(plugin).runGlobal(task);
     }
 
     public static boolean onEntity(@NotNull Plugin plugin, @NotNull Entity entity,
                                    @NotNull Runnable task, @Nullable Runnable retired) {
-        if (synchronousForTesting) {
-            task.run();
-            return true;
-        }
-
-        if (!plugin.isEnabled()) {
-            return false;
-        }
-        try {
-            return entity.getScheduler().run(plugin, scheduledTask -> task.run(),
-                    retired == null ? null : retired) != null;
-        } catch (IllegalPluginAccessException disabledMidCall) {
-            return false;
-        }
+        return scheduler(plugin).runForEntity(entity, task, retired);
     }
 
     public static boolean onEntity(@NotNull Plugin plugin, @NotNull Entity entity, @NotNull Runnable task) {
@@ -122,24 +60,9 @@ public final class Schedulers {
     public static @NotNull ScheduledHandle entityTimer(@NotNull Plugin plugin, @NotNull Entity entity,
                                                        @NotNull Consumer<ScheduledHandle> task,
                                                        long delayTicks, long periodTicks) {
-        if (!plugin.isEnabled()) {
-            return () -> {
-            };
-        }
-        long delay = Math.max(1, delayTicks);
-        long period = Math.max(1, periodTicks);
-        try {
-            var handle = entity.getScheduler().runAtFixedRate(plugin,
-                    scheduledTask -> task.accept(scheduledTask::cancel), null, delay, period);
-            if (handle == null) {
-                return () -> {
-                };
-            }
-            return handle::cancel;
-        } catch (IllegalPluginAccessException disabledMidCall) {
-            return () -> {
-            };
-        }
+        TaskHandle handle = scheduler(plugin).repeatForEntity(entity, self -> task.accept(self::cancel), null,
+                delayTicks, periodTicks);
+        return handle::cancel;
     }
 
     @FunctionalInterface

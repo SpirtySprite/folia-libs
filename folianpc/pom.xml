@@ -25,6 +25,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>net.foliacommons</groupId>
+            <artifactId>folia-commons</artifactId>
+            <version>${folia-commons.version}</version>
+        </dependency>
+        <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>${paper.version}</version>

@@ -1,5 +1,6 @@
 package com.foliagui.util;
 
+import net.foliacommons.text.Legacy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.MiniMessage;

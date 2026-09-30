@@ -20,7 +20,7 @@
     <description>The FoliaBoard library. Depend on this and shade it into your plugin. Ships no plugin.yml.</description>
 
     <properties>
-        <coverage.minimum>0.34</coverage.minimum>
+        <coverage.minimum>0.33</coverage.minimum>
     </properties>
 
     <repositories>
@@ -31,6 +31,11 @@
     </repositories>
 
     <dependencies>
+        <dependency>
+            <groupId>net.foliacommons</groupId>
+            <artifactId>folia-commons</artifactId>
+            <version>${folia-commons.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>

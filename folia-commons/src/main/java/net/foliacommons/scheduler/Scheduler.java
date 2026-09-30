@@ -7,6 +7,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.function.Consumer;
 
 /**
  * Runs work on the right thread on both Folia and Paper.
@@ -35,6 +36,18 @@ public interface Scheduler {
     /** Repeats {@code task} on the entity's thread. Stops by itself if the entity is removed. */
     @NotNull TaskHandle runForEntityTimer(@NotNull Entity entity, @NotNull Runnable task,
                                           @Nullable Runnable retired, long initialDelayTicks, long periodTicks);
+
+    /**
+     * Like {@link #runForEntityTimer}, but the task receives a handle it can use to cancel its own
+     * repetition, for example once a player has left.
+     */
+    default @NotNull TaskHandle repeatForEntity(@NotNull Entity entity, @NotNull Consumer<TaskHandle> task,
+                                                @Nullable Runnable retired, long initialDelayTicks,
+                                                long periodTicks) {
+        DeferredHandle handle = new DeferredHandle();
+        handle.bind(runForEntityTimer(entity, () -> task.accept(handle), retired, initialDelayTicks, periodTicks));
+        return handle;
+    }
 
     /** Runs {@code task} on the thread that owns the region containing {@code location}. */
     boolean runForLocation(@NotNull Location location, @NotNull Runnable task);

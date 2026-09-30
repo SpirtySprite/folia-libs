@@ -1,7 +1,7 @@
 package net.foliaboard.internal.packet;
 
 import net.foliaboard.internal.packet.reflect.NmsPacketAdapter;
-import net.foliaboard.internal.version.ServerVersion;
+import net.foliacommons.version.ServerVersion;
 
 import java.util.logging.Logger;
 

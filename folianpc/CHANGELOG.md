@@ -6,6 +6,15 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Depends on folia-commons (`net.foliacommons:folia-commons`) for scheduling, server version detection and
+  legacy colour conversion. Shade and relocate it together with this library.
+- Scheduling goes through the folia-commons scheduler. Exceptions other than "plugin disabled" thrown while
+  scheduling are no longer silently swallowed.
+
+### Deprecated
+- `net.folianpc.api.Legacy`. Use `net.foliacommons.text.Legacy`.
+
 ### Added
 - `NpcData.builder()` and `NpcData#toBuilder()`: build and copy snapshots without a 21-argument constructor.
 - `NpcData#serialize()`, `NpcData.deserialize(map)` and `NpcDataCodec`: a versioned, forgiving map format

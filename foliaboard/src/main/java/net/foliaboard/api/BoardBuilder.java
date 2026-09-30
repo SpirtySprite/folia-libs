@@ -4,7 +4,7 @@ import net.foliaboard.internal.service.SidebarService;
 import org.jetbrains.annotations.ApiStatus;
 import net.foliaboard.api.animation.Animation;
 import net.foliaboard.api.format.NumberFormat;
-import net.foliaboard.api.text.Legacy;
+import net.foliacommons.text.Legacy;
 import net.foliaboard.api.text.Text;
 import net.foliaboard.internal.scheduler.Schedulers;
 import net.kyori.adventure.text.Component;

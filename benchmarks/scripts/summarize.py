@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Turns a JMH JSON result file into a readable markdown report.
 
-usage: summarize.py results.json > report.md
+usage: summarize.py results.json [machine description] > report.md
+
+The machine description defaults to the computer running this script. Pass one when the results
+came from somewhere else, for example "GitHub Actions ubuntu-latest runner, 4 vCPUs".
 """
 import json
 import os
@@ -36,7 +39,7 @@ def params_text(params):
     return ", ".join(f"{k}={v}" for k, v in params.items()) if params else ""
 
 
-def main(path):
+def main(path, machine=None):
     with open(path) as handle:
         results = json.load(handle)
     if not results:
@@ -52,7 +55,8 @@ def main(path):
     print(f"| Forks | {first.get('forks', '?')} |")
     print(f"| Warmup | {first.get('warmupIterations', '?')} x {first.get('warmupTime', '?')} |")
     print(f"| Measurement | {first.get('measurementIterations', '?')} x {first.get('measurementTime', '?')} |")
-    print(f"| Machine | {platform.system()} {platform.machine()}, {os.cpu_count()} logical CPUs |")
+    machine = machine or f"{platform.system()} {platform.machine()}, {os.cpu_count()} logical CPUs"
+    print(f"| Machine | {machine} |")
     print()
     print("Scores are the average time of one call (lower is better). The figure after the "
           "score is the 99.9% confidence interval across iterations. Numbers from different machines "
@@ -98,6 +102,6 @@ def main(path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else None)

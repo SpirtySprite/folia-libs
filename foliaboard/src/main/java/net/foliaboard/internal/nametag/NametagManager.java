@@ -1,0 +1,96 @@
+package net.foliaboard.internal.nametag;
+
+import net.foliaboard.api.Nametag;
+import net.foliaboard.internal.Ids;
+import net.foliaboard.internal.packet.PacketAdapter;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+
+public final class NametagManager {
+    private final Plugin plugin;
+    private final PacketAdapter adapter;
+    private final String namespace;
+    private final Map<UUID, NametagImpl> byTarget = new ConcurrentHashMap<>();
+    private final AtomicInteger counter = new AtomicInteger();
+    private final Supplier<Collection<? extends Player>> online = Bukkit::getOnlinePlayers;
+
+    public NametagManager(Plugin plugin, PacketAdapter adapter, String namespace) {
+        this.plugin = plugin;
+        this.namespace = namespace;
+        this.adapter = adapter;
+    }
+
+    public @NotNull Nametag get(@NotNull Player target) {
+        return get(target, null, true);
+    }
+
+    public @NotNull Nametag get(@NotNull Player target, @Nullable Integer sortWeight, boolean applyNow) {
+        boolean[] created = {false};
+        NametagImpl impl = byTarget.compute(target.getUniqueId(), (id, existing) -> {
+            if (existing != null && !existing.removed()) {
+                return existing;
+            }
+            created[0] = true;
+            return new NametagImpl(plugin, adapter, target, generateTeamName(sortWeight), online);
+        });
+        if (created[0] && applyNow) {
+            impl.apply();
+        }
+        return impl;
+    }
+
+    private String generateTeamName(@Nullable Integer sortWeight) {
+        return Ids.team(namespace, sortWeight, counter.getAndIncrement());
+    }
+
+    public @Nullable Nametag getIfPresent(@NotNull Player target) {
+        NametagImpl impl = byTarget.get(target.getUniqueId());
+        return impl == null || impl.removed() ? null : impl;
+    }
+
+    public void onJoin(@NotNull Player viewer) {
+        for (NametagImpl impl : byTarget.values()) {
+            if (!impl.removed()) {
+                impl.applyTo(viewer);
+            }
+        }
+    }
+
+    public void onQuit(@NotNull Player player) {
+        UUID id = player.getUniqueId();
+        NametagImpl own = byTarget.remove(id);
+        if (own != null) {
+            own.remove();
+        }
+        for (NametagImpl impl : byTarget.values()) {
+            impl.forgetViewer(id);
+        }
+    }
+
+    public int active() {
+        int n = 0;
+        for (NametagImpl impl : byTarget.values()) {
+            if (!impl.removed()) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    public void closeAll() {
+        for (NametagImpl impl : byTarget.values()) {
+            impl.remove();
+        }
+        byTarget.clear();
+    }
+}

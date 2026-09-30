@@ -157,7 +157,7 @@ server will be somewhat slower.
 
 ### The same benchmarks on a desktop PC
 
-The same quick run on a Windows desktop (16 logical CPUs, JDK 25), next to the GitHub runner. Full report:
+The same quick run on a Windows desktop (16 logical CPUs, JDK 25), made while other programs were running, next to the GitHub runner. Full report:
 [`windows-16cpu-quick.md`](benchmarks/results/windows-16cpu-quick.md).
 
 | What | GitHub runner (4 CPUs) | Desktop PC (16 CPUs) |

@@ -3,6 +3,7 @@
 | File | What it is |
 |---|---|
 | `github-runner-quick.md` / `.json` | Quick-mode run on GitHub's shared `ubuntu-latest` runner (4 vCPUs). These are the figures quoted in the top-level README. |
+| `github-runner-quick-npc-nearby-lookup.md` / `.json` | Quick-mode run of only the NPC visibility benchmark on the same kind of GitHub runner, after FoliaNPC started looking only at nearby players. These are the NPC figures quoted in the top-level README. The other benchmarks in `github-runner-quick` were not affected by that change. |
 | `windows-16cpu-quick.md` | Quick-mode run on a Windows desktop PC (AMD64, 16 logical CPUs, JDK 25), made with the same commands. Used for the comparison in the top-level README. |
 
 `github-runner-quick.json` combines two runs of the **Benchmarks** workflow, both on the same kind of runner:

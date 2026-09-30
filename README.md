@@ -61,7 +61,7 @@ They answer one question: **how much work does each library add to my server?**
 A Minecraft server has **50 ms per tick**. If everything it does in a tick takes longer than that, the server lags.
 So a library step that takes 0.01 ms is irrelevant, and one that takes 50 ms is a problem.
 
-**Where the numbers come from:** one run on GitHub's shared 4-CPU test machine, in quick mode (details in
+**Where the numbers come from:** runs on GitHub's shared 4-CPU test machine, in quick mode (the FoliaNPC figures were measured again after its lookup was improved; details in
 [`benchmarks/results/`](benchmarks/results/)). Your server will be faster or slower, so read the numbers as
 *"about this much, and this is what makes it grow"*, not as promises. The benchmarks use stand-ins for the game
 server, so they measure each library's own work. They do not include sending packets over the network.
@@ -72,31 +72,41 @@ server, so they measure each library's own work. They do not include sending pac
 |---|---|
 | **FoliaBoard** | Cheap. Changing a scoreboard line costs a fraction of a microsecond. The slowest step is turning text with colours into formatted text (5–9 µs), and the library remembers the result, so repeats take about 2 ns. |
 | **FoliaGUI** | Cheap. Redrawing a menu that has not changed costs about 0.2 µs. Changing one item costs about 7 µs. Turning a page takes about 0.4 ms, and it does **not** get slower when the menu holds more entries. |
-| **FoliaNPC** | Cost grows with **(number of NPCs) x (players online)**. Up to about 1,000 NPCs with 100 players is well under 1 ms. Ten thousand NPCs with 500 players is about 48 ms, which is too slow. This is the one to size carefully. |
+| **FoliaNPC** | Cost grows with the number of NPCs times the players **near** them. Even 10,000 NPCs with 500 players spread over a large world take about 3 ms per pass. The worst case is many players crowded around many NPCs: about 20 ms for 10,000 NPCs and 500 players in the same small area. |
 | **folia-commons** | Negligible. Every call is under 1 µs. |
 
 ### FoliaNPC: how many NPCs can I have?
 
-Every 2 ticks (100 ms) FoliaNPC checks, for every NPC, which players should see it. Each check takes about
-**10 ns**, and it is done for every NPC against every online player in the same world, even NPCs nobody is near. That makes
-one pass take about `NPCs x players x 10 ns` (players counted in the NPC's world). The pass runs on one thread: the main thread on Paper, the global region thread on Folia.
+Every 2 ticks (100 ms) FoliaNPC checks which players should see each NPC. For every NPC it only looks at the
+players within that NPC's view distance (48 blocks unless you change it): the players of a world are sorted into
+32 block squares once per pass, and each NPC only reads the squares around it. The cost is therefore about
+`NPCs x players near them`, not `NPCs x all players`. The pass runs on one thread: the main thread on Paper, the
+global region thread on Folia.
 
 Time for one pass, with players spread out in a large world (lower is better):
 
 | NPCs | 10 players online | 100 players online | 500 players online |
 |---:|---:|---:|---:|
-| 100 | 0.01 ms | 0.09 ms | 0.5 ms |
-| 1,000 | 0.13 ms | 0.9 ms | 5.1 ms (noticeable) |
-| 10,000 | 1.3 ms | 9.9 ms (noticeable) | **47.8 ms (too slow)** |
+| 100 | 0.01 ms | 0.01 ms | 0.03 ms |
+| 1,000 | 0.08 ms | 0.07 ms | 0.2 ms |
+| 10,000 | 0.9 ms | 1.7 ms | 3.1 ms |
 
 How to judge a cell, as a share of the 100 ms between passes: under 5% is fine, 5–25% is noticeable, and over 25%
-is too slow. On Paper, a 48 ms pass would take almost a whole tick by itself.
+is too slow. Every cell above is fine. Before this lookup existed, 10,000 NPCs with 500 players took 47.8 ms.
 
-- **Crowded worlds cost a bit more.** When every player can see many NPCs (a 400 block world instead of 4,000),
-  the same table is roughly 20–35% slower; 10,000 NPCs with 500 players takes 64 ms.
-- **Moving players cost about the same.** With a tenth of the players moving each pass, 10,000 NPCs with 500 players takes 54 ms.
-- **Planned improvement:** looking up only the NPCs near each player instead of all of them, so cost follows the NPCs
-  that are actually in view.
+**The worst case is a crowd.** When every player is close to every NPC, each NPC really does have to look at every
+player, and nothing can be skipped. The same table for players packed into a small 400 block world:
+
+| NPCs | 10 players online | 100 players online | 500 players online |
+|---:|---:|---:|---:|
+| 100 | 0.01 ms | 0.04 ms | 0.2 ms |
+| 1,000 | 0.09 ms | 0.4 ms | 1.6 ms |
+| 10,000 | 1.0 ms | 4.7 ms (noisy) | 19.9 ms (noisy, noticeable) |
+
+- **Moving players cost a little more.** With a tenth of the players moving each pass, 10,000 NPCs with 500 players
+  takes 3.4 ms spread out and 27.9 ms crowded.
+- **Few players costs the same as before.** With 16 players or fewer in a world the library just checks all of
+  them, which is cheaper than sorting them.
 
 Other FoliaNPC work, for comparison:
 
@@ -157,20 +167,21 @@ server will be somewhat slower.
 
 ### The same benchmarks on a desktop PC
 
-The same quick run on a Windows desktop (16 logical CPUs, JDK 25), made while other programs were running, next to the GitHub runner. Full report:
-[`windows-16cpu-quick.md`](benchmarks/results/windows-16cpu-quick.md).
+The same quick run on a Windows desktop (16 logical CPUs, JDK 25), next to the GitHub runner. Full report:
+[`windows-16cpu-quick.md`](benchmarks/results/windows-16cpu-quick.md). Both runs were made **before** FoliaNPC started
+looking only at nearby players, so the NPC rows show the old, slower behaviour on both machines.
 
 | What | GitHub runner (4 CPUs) | Desktop PC (16 CPUs) |
 |---|---:|---:|
-| NPC pass, 1,000 NPCs, 100 players | 0.9 ms | 0.74 ms |
-| NPC pass, 10,000 NPCs, 100 players | 9.9 ms | 7.7 ms |
-| NPC pass, 10,000 NPCs, 500 players | 47.8 ms | 40.9 ms |
+| NPC pass, 1,000 NPCs, 100 players (old lookup) | 0.9 ms | 0.74 ms |
+| NPC pass, 10,000 NPCs, 100 players (old lookup) | 9.9 ms | 7.7 ms |
+| NPC pass, 10,000 NPCs, 500 players (old lookup) | 47.8 ms | 40.9 ms |
 | Walking route, 64 blocks | 0.9–1.2 ms | 0.75–0.99 ms |
 | Change one sidebar line (15 lines) | 0.14–0.27 µs | 0.27 µs |
 | Turn a GUI page | 0.3–0.45 ms | 0.24–0.33 ms |
 
-The two machines agree to within about 20%, so the conclusions above do not depend on the hardware. More CPU cores
-do not help here, because one pass runs on one thread.
+The two machines agree to within about 20%, so the conclusions do not depend on the hardware. More CPU cores do
+not help here, because one pass runs on one thread.
 
 ### What these numbers do not cover
 

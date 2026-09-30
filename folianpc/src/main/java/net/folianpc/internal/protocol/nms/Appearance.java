@@ -54,6 +54,9 @@ final class Appearance {
     private int villagerDataIndex = -1;
     private Object villagerDataSerializer;
     private Constructor<?> villagerDataCtor;
+    /** Newer versions build villager data from registry holders; older ones from the registry values themselves. */
+    private boolean villagerDataUsesHolders;
+    private Method holderValue;
     private Object villagerTypeRegistry;
     private Object villagerProfessionRegistry;
 
@@ -154,6 +157,10 @@ final class Appearance {
         }
         try {
             int level = Math.max(1, npc.mobVariant().villagerLevel());
+            if (!villagerDataUsesHolders) {
+                type = Reflect.invoke(holderValue, type);
+                profession = Reflect.invoke(holderValue, profession);
+            }
             Object data = Reflect.newInstance(villagerDataCtor, type, profession, level);
             values.add(metadata.value(villagerDataIndex, villagerDataSerializer, data));
         } catch (RuntimeException e) {
@@ -181,12 +188,16 @@ final class Appearance {
         if (registryGet != null) {
             return registryGet;
         }
-        for (Method m : registry.getClass().getMethods()) {
-            if (m.getName().equals("get") && m.getParameterCount() == 1
-                    && m.getParameterTypes()[0] == identifierClass) {
-                m.setAccessible(true);
-                registryGet = m;
-                return m;
+        // Newer versions return Optional<Holder> from get(id); older ones return the value from get(id) and the
+        // holder from getHolder(id).
+        for (String name : new String[] {"get", "getHolder"}) {
+            for (Method m : registry.getClass().getMethods()) {
+                if (m.getName().equals(name) && m.getParameterCount() == 1
+                        && m.getParameterTypes()[0] == identifierClass && m.getReturnType() == Optional.class) {
+                    m.setAccessible(true);
+                    registryGet = m;
+                    return m;
+                }
             }
         }
         throw new IllegalStateException("No get(" + identifierClass.getSimpleName() + ") on " + registry.getClass());
@@ -269,12 +280,28 @@ final class Appearance {
         try {
             Class<?> id = Reflect.nms("resources", "Identifier", "ResourceLocation");
             this.identifierClass = id;
-            this.identifierWithDefaultNamespace = Reflect.method(id, "withDefaultNamespace", String.class);
+            this.identifierWithDefaultNamespace = identifierFactory(id);
         } catch (RuntimeException e) {
             plugin.getLogger().log(java.util.logging.Level.WARNING,
                     "FoliaNPC: registry tools unavailable, mob variants/villager data disabled", e);
             this.identifierClass = null;
         }
+    }
+
+    /** The static {@code String -> identifier} factory, which has had a different name in different versions. */
+    private static Method identifierFactory(Class<?> identifier) {
+        for (String name : new String[] {"withDefaultNamespace", "parse", "tryParse"}) {
+            try {
+                Method factory = Reflect.method(identifier, name, String.class);
+                if (java.lang.reflect.Modifier.isStatic(factory.getModifiers())
+                        && factory.getReturnType() == identifier) {
+                    return factory;
+                }
+            } catch (IllegalStateException missing) {
+                // try the next name
+            }
+        }
+        throw new IllegalStateException("No String factory on " + identifier.getName());
     }
 
     private Object registryAccess() {
@@ -295,14 +322,17 @@ final class Appearance {
     }
 
     private static Method findLookupOrThrowReturningRegistry(Class<?> registryAccessClass) {
-        for (Method m : registryAccessClass.getMethods()) {
-            if (m.getName().equals("lookupOrThrow") && m.getParameterCount() == 1
-                    && m.getReturnType().getSimpleName().equals("Registry")) {
-                m.setAccessible(true);
-                return m;
+        // lookupOrThrow on newer versions, registryOrThrow on 1.20.
+        for (String name : new String[] {"lookupOrThrow", "registryOrThrow"}) {
+            for (Method m : registryAccessClass.getMethods()) {
+                if (m.getName().equals(name) && m.getParameterCount() == 1
+                        && m.getReturnType().getSimpleName().equals("Registry")) {
+                    m.setAccessible(true);
+                    return m;
+                }
             }
         }
-        throw new IllegalStateException("No lookupOrThrow(ResourceKey) -> Registry found");
+        throw new IllegalStateException("No lookupOrThrow(ResourceKey) or registryOrThrow(ResourceKey) -> Registry found");
     }
 
     private void resolveSimpleVariants() {
@@ -378,13 +408,27 @@ final class Appearance {
 
             villagerDataIndex = Metadata.indexOf(Reflect.staticField(villager, "DATA_VILLAGER_DATA"));
             villagerDataSerializer = Reflect.staticField(serializers, "VILLAGER_DATA");
-            villagerDataCtor = Reflect.constructor(villagerData, holder, holder, int.class);
+            villagerDataCtor = villagerDataConstructor(villagerData);
+            villagerDataUsesHolders = villagerDataCtor.getParameterTypes()[0] == holder;
+            holderValue = villagerDataUsesHolders ? null : Reflect.method(holder, "value");
             villagerTypeRegistry = registryFor(Reflect.staticField(registries, "VILLAGER_TYPE"));
             villagerProfessionRegistry = registryFor(Reflect.staticField(registries, "VILLAGER_PROFESSION"));
         } catch (RuntimeException e) {
             plugin.getLogger().log(java.util.logging.Level.WARNING, "FoliaNPC: villager data unavailable", e);
             villagerDataIndex = -1;
         }
+    }
+
+    /** The {@code (type, profession, level)} constructor, whichever way this version declares its first two types. */
+    private static Constructor<?> villagerDataConstructor(Class<?> villagerData) {
+        for (Constructor<?> candidate : villagerData.getDeclaredConstructors()) {
+            Class<?>[] types = candidate.getParameterTypes();
+            if (types.length == 3 && types[2] == int.class && !types[0].isPrimitive() && !types[1].isPrimitive()) {
+                candidate.setAccessible(true);
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("No (type, profession, level) constructor on " + villagerData.getName());
     }
 
     private static Class<?> nmsAny(String[] subPackages, String mojangName) {

@@ -8,7 +8,6 @@ import com.foliagui.gui.MerchantGui;
 import com.foliagui.gui.SignGui;
 import com.foliagui.item.GuiAction;
 import com.foliagui.item.GuiItem;
-import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -141,11 +140,6 @@ public final class GuiListener implements Listener {
                 service.scheduler().runForEntity(player, () -> gui.open(player), null);
             }
         }
-    }
-
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
-    public void onSignChange(UncheckedSignChangeEvent event) {
-        SignGui.handleSignChange(service, event);
     }
 
     @EventHandler

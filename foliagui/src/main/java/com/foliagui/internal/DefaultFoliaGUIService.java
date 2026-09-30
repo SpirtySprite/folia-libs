@@ -23,12 +23,15 @@ import java.util.Objects;
 
 public final class DefaultFoliaGUIService implements FoliaGUIService {
 
+    private static final String SIGN_EVENT = "io.papermc.paper.event.packet.UncheckedSignChangeEvent";
+
     private final Plugin plugin;
     private final Scheduler scheduler;
     private final GuiRegistry guis;
     private final GuiNavigation navigation;
     private final GuiSessions sessions = new GuiSessions();
     private final GuiListener listener;
+    private final org.bukkit.event.Listener signListener;
     private volatile GuiTheme theme = new GuiTheme();
     private volatile boolean closed;
 
@@ -39,6 +42,11 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
         this.navigation = new GuiNavigation(this);
         this.listener = new GuiListener(this);
         owner.getServer().getPluginManager().registerEvents(listener, owner);
+        // Sign input needs an event that older servers lack, and its listener must stay out of GuiListener.
+        this.signListener = present(SIGN_EVENT) ? new com.foliagui.listener.SignChangeListener(this) : null;
+        if (signListener != null) {
+            owner.getServer().getPluginManager().registerEvents(signListener, owner);
+        }
         Bukkit.getServicesManager().register(FoliaGUIService.class, this, owner, ServicePriority.Normal);
     }
 
@@ -101,7 +109,7 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
                 .ok("Inventory GUIs")
                 .feature("Anvil text input", present("org.bukkit.inventory.view.AnvilView"),
                         "AnvilView is missing; needs Paper 1.21 or newer")
-                .feature("Sign text input", present("io.papermc.paper.event.packet.UncheckedSignChangeEvent"),
+                .feature("Sign text input", present(SIGN_EVENT),
                         "UncheckedSignChangeEvent is missing; needs a recent Paper")
                 .feature("Merchant windows", present("org.bukkit.inventory.MerchantInventory"),
                         "MerchantInventory is missing")
@@ -136,6 +144,9 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
         sessions.clearAll();
         navigation.clearAll();
         HandlerList.unregisterAll(listener);
+        if (signListener != null) {
+            HandlerList.unregisterAll(signListener);
+        }
         Bukkit.getServicesManager().unregister(FoliaGUIService.class, this);
     }
 

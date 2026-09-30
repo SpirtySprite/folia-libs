@@ -4,7 +4,6 @@ import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUIService;
 import com.foliagui.scheduler.TaskHandle;
 import com.foliagui.util.Text;
-import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Location;
@@ -97,17 +96,16 @@ public final class SignGui {
     }
 
     @ApiStatus.Internal
-    public static boolean handleSignChange(@NotNull FoliaGUIService service, @NotNull UncheckedSignChangeEvent event) {
-        Player player = event.getPlayer();
+    public static boolean handleSignChange(@NotNull FoliaGUIService service, @NotNull Player player,
+                                           @NotNull List<? extends net.kyori.adventure.text.Component> lines) {
         SignGui gui = service.sessions().sign.remove(player);
         if (gui == null) {
             return false;
         }
-        event.setCancelled(true);
         if (gui.timeoutTask != null) {
             gui.timeoutTask.cancel();
         }
-        List<String> raw = event.lines().stream()
+        List<String> raw = lines.stream()
                 .map(PlainTextComponentSerializer.plainText()::serialize)
                 .collect(Collectors.toList());
         List<String> text = new ArrayList<>(raw.size());

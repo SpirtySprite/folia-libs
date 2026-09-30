@@ -339,13 +339,15 @@ public final class NpcManager {
         }
     }
 
-    private final Map<String, List<PlayerTracker.Tracked>> playersByWorld = new java.util.HashMap<>();
+    private final Map<String, PlayerGrid> playersByWorld = new java.util.HashMap<>();
+    private final List<PlayerTracker.Tracked> scratch = new java.util.ArrayList<>();
+    private final Set<UUID> forcedHandled = new HashSet<>();
 
     public void tick() {
         long start = System.nanoTime();
         playersByWorld.clear();
         for (PlayerTracker.Tracked t : tracker.all()) {
-            playersByWorld.computeIfAbsent(t.world(), key -> new java.util.ArrayList<>()).add(t);
+            playersByWorld.computeIfAbsent(t.world(), key -> new PlayerGrid()).add(t);
         }
         for (NpcImpl npc : byId.values()) {
             if (!npc.removed()) {
@@ -391,10 +393,34 @@ public final class NpcManager {
             nearNow.clear();
         }
 
-        List<PlayerTracker.Tracked> sameWorld = playersByWorld.getOrDefault(pos.world(), List.of());
         double proxRadius = trackProximity ? npc.proximityRadius() : 0.0;
         double proxSq = proxRadius * proxRadius;
-        for (PlayerTracker.Tracked t : sameWorld) {
+        // Only players close enough to matter are examined: the ones within view distance (or the proximity
+        // radius), plus any player this NPC was forced visible to, who is shown from any distance.
+        scratch.clear();
+        List<PlayerTracker.Tracked> candidates = List.of();
+        PlayerGrid sameWorld = playersByWorld.get(pos.world());
+        if (sameWorld != null) {
+            candidates = sameWorld.near(pos.x(), pos.z(), Math.max(range, proxRadius), scratch);
+            if (npc.hasForcedVisibility()) {
+                if (candidates != scratch) {
+                    scratch.addAll(candidates);
+                    candidates = scratch;
+                }
+                List<PlayerTracker.Tracked> withForced = scratch;
+                forcedHandled.clear();
+                for (PlayerTracker.Tracked near : withForced) {
+                    forcedHandled.add(near.uuid());
+                }
+                npc.forEachForcedVisible(id -> {
+                    PlayerTracker.Tracked forced = tracker.get(id);
+                    if (forced != null && forced.world().equals(pos.world()) && forcedHandled.add(id)) {
+                        withForced.add(forced);
+                    }
+                });
+            }
+        }
+        for (PlayerTracker.Tracked t : candidates) {
             double distSq = pos.distanceSquared(t.x(), t.y(), t.z());
             if (trackProximity && distSq <= proxSq) {
                 nearNow.add(t.uuid());

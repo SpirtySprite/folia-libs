@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -609,6 +610,65 @@ class NpcManagerTest {
         manager.tick();
 
         assertEquals(1, backend.shows.size());
+    }
+
+    @Test
+    void aForcedPlayerWhoIsAlsoInRangeIsShownOnce() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        UUID id = UUID.randomUUID();
+        track(player(id), "world", 0, 64, 5);
+
+        npc.showTo(id);
+        manager.tick();
+        manager.tick();
+
+        assertEquals(1, backend.shows.size());
+    }
+
+    @Test
+    void viewersMatchADirectDistanceCheckForManyNpcsAndPlayers() {
+        java.util.Random random = new java.util.Random(7);
+        manager.viewDistance(48);
+        List<NpcImpl> npcs = new ArrayList<>();
+        for (int i = 0; i < 60; i++) {
+            NpcImpl npc = manager.create("n" + i, new Position("world",
+                    (random.nextDouble() - 0.5) * 600, 64, (random.nextDouble() - 0.5) * 600, 0, 0));
+            if (i % 5 == 0) {
+                npc.viewDistance(10 + random.nextInt(150));
+            }
+            npcs.add(npc);
+        }
+        manager.create("elsewhere", new Position("nether", 0, 64, 0, 0, 0));
+        List<PlayerTracker.Tracked> players = new ArrayList<>();
+        for (int i = 0; i < 80; i++) {
+            UUID id = UUID.randomUUID();
+            String world = i % 10 == 0 ? "nether" : "world";
+            PlayerTracker.Tracked t = new PlayerTracker.Tracked(player(id), world,
+                    (random.nextDouble() - 0.5) * 600, 50 + random.nextInt(40), (random.nextDouble() - 0.5) * 600);
+            tracker.put(t);
+            players.add(t);
+        }
+        // Some players are forced in or out whatever their distance.
+        npcs.get(3).showTo(players.get(1).uuid());
+        npcs.get(3).hideFrom(players.get(2).uuid());
+        npcs.get(4).showTo(players.get(5).uuid());
+
+        manager.tick();
+
+        for (NpcImpl npc : npcs) {
+            double range = npc.viewDistance() > 0 ? npc.viewDistance() : 48;
+            Set<UUID> expected = new java.util.HashSet<>();
+            for (PlayerTracker.Tracked t : players) {
+                if (!t.world().equals(npc.position().world())) {
+                    continue;
+                }
+                boolean inRange = npc.position().distanceSquared(t.x(), t.y(), t.z()) <= range * range;
+                if (npc.visibleTo(t.player(), inRange)) {
+                    expected.add(t.uuid());
+                }
+            }
+            assertEquals(expected, new java.util.HashSet<>(npc.viewers()), "viewers of " + npc.name());
+        }
     }
 
     @Test

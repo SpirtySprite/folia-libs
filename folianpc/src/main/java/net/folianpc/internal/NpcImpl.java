@@ -715,6 +715,27 @@ public final class NpcImpl implements Npc {
         return visibleWhen;
     }
 
+    /** Players this NPC is forced visible to, which are shown even when out of range. Empty for most NPCs. */
+    boolean hasForcedVisibility() {
+        if (visibility.isEmpty()) {
+            return false;
+        }
+        for (Boolean forced : visibility.values()) {
+            if (forced) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void forEachForcedVisible(java.util.function.Consumer<UUID> action) {
+        for (Map.Entry<UUID, Boolean> entry : visibility.entrySet()) {
+            if (entry.getValue()) {
+                action.accept(entry.getKey());
+            }
+        }
+    }
+
     boolean visibleTo(org.bukkit.entity.Player player, boolean inRange) {
         Boolean forced = visibility.get(player.getUniqueId());
         if (forced != null) {

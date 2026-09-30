@@ -36,3 +36,6 @@ Thumbs.db
 dependency-reduced-pom.xml
 
 server-test/
+# Scratch output from smoke runs
+benchmarks/results/smoke-*
+benchmarks/results/ci-smoke*

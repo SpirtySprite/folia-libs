@@ -13,6 +13,7 @@
     <description>Libraries for Paper and Folia plugins: scoreboards, inventory GUIs and packet NPCs.</description>
 
     <modules>
+        <module>folia-commons</module>
         <module>foliaboard</module>
         <module>foliagui</module>
         <module>folianpc</module>

@@ -1,0 +1,6 @@
+name: FoliaIntegration
+version: ${project.version}
+main: io.github.spirtysprite.integration.IntegrationPlugin
+api-version: '1.20'
+folia-supported: true
+description: Loads every folia-libs library inside a real server and checks that it works.

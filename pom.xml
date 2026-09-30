@@ -38,6 +38,13 @@
 
     <profiles>
         <!-- The benchmarks take a while to build and are not part of a normal build: mvn -Pbenchmarks ... -->
+        <!-- The plugin that runs the libraries inside a real server: mvn -Pintegration package ... -->
+        <profile>
+            <id>integration</id>
+            <modules>
+                <module>integration</module>
+            </modules>
+        </profile>
         <profile>
             <id>benchmarks</id>
             <modules>

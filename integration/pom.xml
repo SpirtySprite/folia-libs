@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.spirtysprite</groupId>
+        <artifactId>folia-libs-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>folia-integration</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>folia-integration</name>
+    <description>A plugin that loads all the libraries inside a real Paper or Folia server and checks that they work.
+        Not published.</description>
+
+    <properties>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <jacoco.skip>true</jacoco.skip>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>net.foliacommons</groupId>
+            <artifactId>folia-commons</artifactId>
+            <version>${folia-commons.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.foliaboard</groupId>
+            <artifactId>foliaboard-core</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.foliagui</groupId>
+            <artifactId>foliagui-api</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.folianpc</groupId>
+            <artifactId>folianpc</artifactId>
+            <version>1.1.1</version>
+        </dependency>
+        <dependency>
+            <groupId>io.papermc.paper</groupId>
+            <artifactId>paper-api</artifactId>
+            <version>${paper.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>folia-integration</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- The libraries are shaded and relocated, exactly as a plugin author is told to do, so the test also
+                 proves that relocation does not break them. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <relocations>
+                                <relocation>
+                                    <pattern>net.foliacommons</pattern>
+                                    <shadedPattern>shaded.foliacommons</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.foliaboard</pattern>
+                                    <shadedPattern>shaded.foliaboard</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.foliagui</pattern>
+                                    <shadedPattern>shaded.foliagui</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.folianpc</pattern>
+                                    <shadedPattern>shaded.folianpc</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

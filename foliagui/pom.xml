@@ -23,7 +23,7 @@
         <coverage.minimum>0.50</coverage.minimum>
         <paper.version>1.21.11-R0.1-SNAPSHOT</paper.version>
         <junit.version>6.0.3</junit.version>
-        <mockbukkit.version>4.110.0</mockbukkit.version>
+        <mockbukkit.version>4.116.3</mockbukkit.version>
     </properties>
 
     <repositories>

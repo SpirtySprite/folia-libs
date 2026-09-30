@@ -62,6 +62,8 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(this, this);
     }
 
+    private final java.util.concurrent.atomic.AtomicInteger menuClicks = new java.util.concurrent.atomic.AtomicInteger();
+    private final Set<String> npcClicks = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final CompletableFuture<Player> firstPlayer = new CompletableFuture<>();
 
     @EventHandler
@@ -293,20 +295,32 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                             .line("<green>Line two")
                             .build();
                     Location near = player.getLocation().add(3, 0, 0);
-                    npc.builder().name("ItNpc").location(near).spawn();
+                    npc.builder().name("ItNpc").location(near)
+                            .onClick((who, clicked, type) -> npcClicks.add(type.name()))
+                            .spawn();
                     Gui menu = Gui.builder().service(gui).rows(3).title("Integration Menu").create();
-                    menu.setItem(13, new com.foliagui.item.GuiItem(org.bukkit.Material.DIAMOND));
+                    menu.setItem(13, new com.foliagui.item.GuiItem(new org.bukkit.inventory.ItemStack(org.bukkit.Material.DIAMOND),
+                            click -> menuClicks.incrementAndGet()));
                     menu.open(player);
                     scheduler.runGlobalTimer(new Runnable() {
                         private int ticks;
 
                         @Override
                         public void run() {
-                            if (++ticks == 100) {
+                            ticks++;
+                            boolean allClicked = menuClicks.get() > 0 && npcClicks.contains("LEFT") && npcClicks.contains("RIGHT");
+                            if (ticks == 400 || allClicked && ticks >= 100) {
                                 scheduler.runForEntity(player, () -> {
                                     player.kick(net.kyori.adventure.text.Component.text("integration done"));
-                                    done.complete("sidebar, NPC and menu sent to " + player.getName());
-                                }, () -> done.complete("player left before the scenario ended"));
+                                    String summary = "sidebar, NPC and menu sent to " + player.getName()
+                                            + "; menu clicks=" + menuClicks.get() + ", NPC clicks=" + npcClicks;
+                                    if (allClicked) {
+                                        done.complete(summary);
+                                    } else {
+                                        done.completeExceptionally(new IllegalStateException(
+                                                "the player's clicks did not all arrive: " + summary));
+                                    }
+                                }, () -> done.completeExceptionally(new IllegalStateException("player left early")));
                             }
                         }
                     }, 1, 1);

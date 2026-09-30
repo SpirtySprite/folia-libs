@@ -36,6 +36,17 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
+import java.util.HashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.InteractAction;
+import org.geysermc.mcprotocollib.protocol.data.game.inventory.ClickItemAction;
+import org.geysermc.mcprotocollib.protocol.data.game.inventory.ContainerActionType;
+import org.geysermc.mcprotocollib.protocol.data.game.item.HashedStack;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.inventory.ServerboundContainerClickPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundInteractPacket;
 
 /**
  * Joins a server as an ordinary player and writes down what the server sent it.
@@ -56,6 +67,16 @@ public final class Bot {
     private final List<String> playerInfo = new ArrayList<>();
     private final List<String> screens = new ArrayList<>();
     private final List<String> contents = new ArrayList<>();
+    private final List<String> actions = new ArrayList<>();
+    private final Map<String, UUID> uuidByName = new HashMap<>();
+    private final Map<UUID, Integer> entityByUuid = new HashMap<>();
+    private final ScheduledExecutorService delayed = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "bot-actions");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private boolean clickedMenu;
+    private boolean interactedWithNpc;
     private boolean joined;
     private String disconnectReason = "";
     private final CountDownLatch finished = new CountDownLatch(1);
@@ -82,7 +103,7 @@ public final class Bot {
         session.addListener(new SessionAdapter() {
             @Override
             public void packetReceived(Session source, Packet packet) {
-                bot.onPacket(packet);
+                bot.onPacket(source, packet);
             }
 
             @Override
@@ -105,7 +126,7 @@ public final class Bot {
         System.exit(0);
     }
 
-    private synchronized void onPacket(Packet packet) {
+    private synchronized void onPacket(Session session, Packet packet) {
         packetCounts.merge(packet.getClass().getSimpleName(), 1, Integer::sum);
         if (packet instanceof ClientboundLoginPacket) {
             joined = true;
@@ -120,11 +141,15 @@ public final class Bot {
                     + " | players=" + p.getPlayers().length);
         } else if (packet instanceof ClientboundAddEntityPacket p) {
             add(entities, p.getType() + " | " + p.getUuid() + " | id=" + p.getEntityId());
+            entityByUuid.put(p.getUuid(), p.getEntityId());
+            interactWithNpcWhenKnown(session);
         } else if (packet instanceof ClientboundPlayerInfoUpdatePacket p) {
             for (PlayerListEntry entry : p.getEntries()) {
                 String profileName = entry.getProfile() == null ? "?" : entry.getProfile().getName();
                 add(playerInfo, p.getActions() + " | " + profileName + " | " + entry.getProfileId());
+                uuidByName.put(profileName, entry.getProfileId());
             }
+            interactWithNpcWhenKnown(session);
         } else if (packet instanceof ClientboundOpenScreenPacket p) {
             add(screens, "container=" + p.getContainerId() + " | " + p.getType() + " | " + plain(p.getTitle()));
         } else if (packet instanceof ClientboundContainerSetContentPacket p) {
@@ -135,7 +160,41 @@ public final class Bot {
                 }
             }
             add(contents, "container=" + p.getContainerId() + " | slots=" + p.getItems().length + " | filled=" + filled);
+            if (p.getContainerId() != 0 && filled > 0 && !clickedMenu) {
+                clickedMenu = true;
+                int container = p.getContainerId();
+                int state = p.getStateId();
+                // Click the item in the middle of the three row menu, as a player would.
+                delayed.schedule(() -> {
+                    session.send(new ServerboundContainerClickPacket(container, state, 13, ContainerActionType.CLICK_ITEM,
+                            ClickItemAction.LEFT_CLICK, null, new Int2ObjectOpenHashMap<HashedStack>()));
+                    recordAction("clicked slot 13 of container " + container);
+                }, 600, TimeUnit.MILLISECONDS);
+            }
         }
+    }
+
+    /** Once the NPC's player entry and entity are both known, right click it and then left click it. */
+    private void interactWithNpcWhenKnown(Session session) {
+        UUID npc = uuidByName.get("ItNpc");
+        Integer entityId = npc == null ? null : entityByUuid.get(npc);
+        if (entityId == null || interactedWithNpc) {
+            return;
+        }
+        interactedWithNpc = true;
+        int id = entityId;
+        delayed.schedule(() -> {
+            session.send(new ServerboundInteractPacket(id, InteractAction.INTERACT, Hand.MAIN_HAND, false));
+            recordAction("right clicked entity " + id);
+        }, 1200, TimeUnit.MILLISECONDS);
+        delayed.schedule(() -> {
+            session.send(new ServerboundInteractPacket(id, InteractAction.ATTACK, false));
+            recordAction("left clicked entity " + id);
+        }, 2000, TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void recordAction(String what) {
+        add(actions, what);
     }
 
     private static void add(List<String> list, String entry) {
@@ -175,6 +234,7 @@ public final class Bot {
         result.put("playerInfo", playerInfo);
         result.put("screens", screens);
         result.put("containerContents", contents);
+        result.put("actions", actions);
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         Files.writeString(file, gson.toJson(result), StandardCharsets.UTF_8);
     }

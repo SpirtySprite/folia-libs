@@ -64,3 +64,37 @@ jobs:
       - run: benchmarks/scripts/run.sh smoke
         env:
           LABEL: ci-smoke
+
+  # Starts real Paper and Folia servers with a plugin that uses all four libraries. The mocks used by the unit
+  # tests cannot catch a class that is missing on an older server or a reflection lookup that changed.
+  servers:
+    name: ${{ matrix.server }} ${{ matrix.minecraft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [paper, folia]
+        minecraft: ['1.20.6', '1.21.4', '1.21.8', '1.21.11']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/folia-libs
+          key: server-${{ matrix.server }}-${{ matrix.minecraft }}
+      - run: mvn -B -ntp -Pintegration package -DskipTests -pl integration -am
+      - run: integration/scripts/run-server-test.sh ${{ matrix.server }} ${{ matrix.minecraft }}
+      - name: Upload the server log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-log-${{ matrix.server }}-${{ matrix.minecraft }}
+          path: |
+            integration/target/server-*/server.log
+            integration/target/server-*/it-result.json
+          if-no-files-found: ignore

@@ -1,0 +1,54 @@
+name: Release
+
+# Every module is released on its own. Tag a commit "<module>-v<version>", for example
+# foliagui-v1.1.0, after setting that version in the module's pom.xml and CHANGELOG.md.
+on:
+  push:
+    tags:
+      - 'foliaboard-v*'
+      - 'foliagui-v*'
+      - 'folianpc-v*'
+      - 'folia-commons-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Work out which module and version this tag is for
+        run: |
+          MODULE="${GITHUB_REF_NAME%-v*}"
+          VERSION="${GITHUB_REF_NAME##*-v}"
+          echo "MODULE=${MODULE}" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+      - name: Check the tag matches the module's pom version
+        run: |
+          POM_VERSION=$(mvn -B -q -ntp -pl "${MODULE}" help:evaluate -Dexpression=project.version -DforceStdout | tail -n 1)
+          if [ "${POM_VERSION}" != "${VERSION}" ]; then
+            echo "Tag says ${VERSION} but ${MODULE}/pom.xml says ${POM_VERSION}"
+            exit 1
+          fi
+      - name: Build and test
+        run: mvn -B -ntp verify -pl "${MODULE}" -am
+      - name: Extract release notes from the module's CHANGELOG.md
+        run: |
+          awk -v v="${VERSION}" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' "${MODULE}/CHANGELOG.md" > release-notes.md
+          if [ ! -s release-notes.md ]; then echo "See ${MODULE}/CHANGELOG.md" > release-notes.md; fi
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            ${{ env.MODULE }}/target/*.jar

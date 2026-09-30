@@ -1,7 +1,19 @@
 name: Feature request
-description: Suggest an improvement to FoliaNPC
+description: Suggest an improvement
 labels: [enhancement]
 body:
+  - type: dropdown
+    id: library
+    attributes:
+      label: Which library?
+      options:
+        - FoliaBoard
+        - FoliaGUI
+        - FoliaNPC
+        - folia-commons
+        - Not sure
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Board, NPC and the shared core support several Paper API versions, so build them against each.
+  compat:
+    name: Paper API ${{ matrix.paper }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        paper:
+          - 1.20.6-R0.1-SNAPSHOT
+          - 1.21.4-R0.1-SNAPSHOT
+          - 1.21.11-R0.1-SNAPSHOT
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B -ntp verify -Dpaper.version=${{ matrix.paper }} -pl '!foliagui'
+      - name: Upload coverage reports
+        if: matrix.paper == '1.21.4-R0.1-SNAPSHOT'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: '*/target/site/jacoco'
+          if-no-files-found: ignore
+
+  # FoliaGUI's tests run against MockBukkit, which is tied to one Paper version.
+  gui:
+    name: FoliaGUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B -ntp verify -pl foliagui -am

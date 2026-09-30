@@ -34,6 +34,8 @@ All notable changes to FoliaBoard are documented here. The format follows
   no longer overwrite each other's sidebars, below-name/tab objectives or nametag teams.
 
 ### Added
+- `FoliaBoard.VERSION` and `FoliaBoard#diagnose()`: a report of the server, the packet layer and which
+  features work on it, to paste into bug reports.
 - Continuous integration with a Paper API version matrix, CodeQL analysis and Dependabot.
 - Release workflow: pushing a `vX.Y.Z` tag builds the project and publishes a GitHub release.
 - `CONTRIBUTING.md`, `SECURITY.md`, issue and pull request templates, and `.editorconfig`.

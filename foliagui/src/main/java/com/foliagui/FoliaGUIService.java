@@ -5,6 +5,7 @@ import com.foliagui.gui.GuiRegistry;
 import com.foliagui.gui.GuiSessions;
 import com.foliagui.gui.GuiTheme;
 import com.foliagui.scheduler.Scheduler;
+import net.foliacommons.diagnostics.Diagnostics;
 import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.ApiStatus;
@@ -38,6 +39,12 @@ public interface FoliaGUIService {
 
     @ApiStatus.Internal
     @NotNull GuiSessions sessions();
+
+    /** What this service is doing right now. */
+    @NotNull FoliaGUIStats stats();
+
+    /** A report of the server and which features work here. Log it or paste it into a bug report. */
+    @NotNull Diagnostics diagnose();
 
     /**
      * Closes every open GUI, forgets all state, and unregisters the listener. Safe to call more than

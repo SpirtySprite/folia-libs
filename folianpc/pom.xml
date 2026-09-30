@@ -63,4 +63,14 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+    <build>
+        <resources>
+            <!-- The *-version.properties file has its ${project.version} placeholder filled in at build
+                 time, so VERSION always reflects the real pom version. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+    </build>
 </project>

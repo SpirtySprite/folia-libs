@@ -16,6 +16,8 @@ All notable changes to FoliaNPC are documented here. The format follows
 - `net.folianpc.api.Legacy`. Use `net.foliacommons.text.Legacy`.
 
 ### Added
+- `FoliaNpc.VERSION` and `FoliaNpc#diagnose()`: a report built from `capabilities()` and `stats()` to paste
+  into bug reports.
 - `NpcData.builder()` and `NpcData#toBuilder()`: build and copy snapshots without a 21-argument constructor.
 - `NpcData#serialize()`, `NpcData.deserialize(map)` and `NpcDataCodec`: a versioned, forgiving map format
   for storing NPC snapshots in YAML, JSON or a database.

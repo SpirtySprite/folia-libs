@@ -22,6 +22,8 @@ import net.foliaboard.api.hook.LineProcessor;
 import net.foliaboard.api.layout.Layout;
 import net.foliaboard.api.placeholder.Placeholders;
 import net.foliaboard.internal.listener.FoliaBoardListener;
+import net.foliacommons.diagnostics.Diagnostics;
+import net.foliacommons.version.LibraryVersion;
 import net.foliaboard.internal.packet.PacketAdapter;
 import net.foliaboard.internal.packet.PacketAdapterFactory;
 import net.foliaboard.internal.scheduler.Schedulers;
@@ -51,6 +53,9 @@ import org.jetbrains.annotations.Nullable;
  * deprecated in favour of the services.
  */
 public final class FoliaBoard {
+    /** The version of this library, read from its packaged build metadata. */
+    public static final String VERSION = LibraryVersion.read(FoliaBoard.class, "/foliaboard-version.properties");
+
     private final BoardRuntime runtime;
     private final SidebarService boards;
     private final TabService tabs;
@@ -114,6 +119,33 @@ public final class FoliaBoard {
     public @NotNull FoliaBoardStats stats() {
         return new FoliaBoardStats(runtime.metrics().totalPackets(), runtime.metrics().refreshCount(),
                 boards.count(), nametags.active());
+    }
+
+    /**
+     * A report of the server, the packet layer and which features work here. Log it or paste it into a bug
+     * report.
+     */
+    public @NotNull Diagnostics diagnose() {
+        FoliaBoardStats stats = stats();
+        return Diagnostics.named("FoliaBoard " + VERSION)
+                .withEnvironment()
+                .section("Packet layer")
+                .info("Adapter", runtime.adapter().describe())
+                .section("Features")
+                .ok("Sidebars")
+                .ok("Nametags")
+                .ok("Boss bars")
+                .ok("Tab list header, footer and names")
+                .feature("Tab list ordering", tabs.orderSupported(),
+                        "needs Paper 1.21.2 or newer; use a nametag tabSort instead")
+                .feature("Per-viewer tab names", tabs.perViewerSupported(),
+                        "the player info packet was not found on this server")
+                .section("Runtime")
+                .info("Sidebars", String.valueOf(stats.activeSidebars()))
+                .info("Nametags", String.valueOf(stats.activeNametags()))
+                .info("Packets sent", String.valueOf(stats.totalPackets()))
+                .info("Provider refreshes", String.valueOf(stats.providerRefreshes()))
+                .build();
     }
 
     public @NotNull Placeholders placeholders() {

@@ -26,6 +26,10 @@ import java.util.UUID;
 
 public final class FoliaNpc {
 
+    /** The version of this library, read from its packaged build metadata. */
+    public static final String VERSION =
+            net.foliacommons.version.LibraryVersion.read(FoliaNpc.class, "/folianpc-version.properties");
+
     private final Plugin plugin;
     private final NmsProtocolBackend backend;
     private final PlayerTracker tracker;
@@ -260,6 +264,34 @@ public final class FoliaNpc {
 
     public Capabilities capabilities() {
         return backend.capabilities();
+    }
+
+    /**
+     * A report of the server and which optional features bound successfully. Log it or paste it into a bug
+     * report.
+     */
+    public net.foliacommons.diagnostics.Diagnostics diagnose() {
+        Capabilities c = capabilities();
+        Stats stats = stats();
+        return net.foliacommons.diagnostics.Diagnostics.named("FoliaNPC " + VERSION)
+                .withEnvironment()
+                .section("Features")
+                .feature("Skins", c.skins(), "player NPCs render with the default skin")
+                .feature("Floating nametags", c.nametags(), "nametags cannot be created")
+                .feature("Name plate hiding", c.namePlateHiding(),
+                        "the vanilla name plate, glow colour and collision cannot be controlled")
+                .feature("Equipment", c.equipment(), "equipment has no visible effect")
+                .feature("Scale", c.scale(), "NPCs always render at scale 1.0")
+                .feature("Rich text", c.richText(), "gradients and hover text fall back to legacy colours")
+                .feature("Baby state", c.baby(), "baby() has no visible effect")
+                .feature("Mob variants", c.mobVariants(), "variant() has no visible effect")
+                .feature("Villager data", c.villagerData(), "profession, type and level have no visible effect")
+                .section("Runtime")
+                .info("NPCs", String.valueOf(stats.npcs()))
+                .info("Viewer shows", String.valueOf(stats.viewerShows()))
+                .info("Packets sent", String.valueOf(stats.packetsSent()))
+                .info("Last tick (ms)", String.format(java.util.Locale.ROOT, "%.3f", stats.lastTickMillis()))
+                .build();
     }
 
     public Stats stats() {

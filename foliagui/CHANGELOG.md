@@ -37,6 +37,8 @@ All notable changes to FoliaGUI are documented here. The format follows
 - Made two async-content tests deterministic (they failed intermittently).
 
 ### Added
+- `FoliaGUIService#stats()` (`FoliaGUIStats`) and `FoliaGUIService#diagnose()`: what a service is doing now, and
+  a report of which features work on this server.
 - Continuous integration with a Paper API version matrix, CodeQL analysis and Dependabot.
 - Release workflow: pushing a `vX.Y.Z` tag builds the project and publishes a GitHub release.
 - `CONTRIBUTING.md`, `SECURITY.md`, issue and pull request templates, and `.editorconfig`.

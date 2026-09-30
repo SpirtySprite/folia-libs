@@ -29,6 +29,10 @@ final class SessionRegistry<T> {
         return sessions.containsKey(player.getUniqueId());
     }
 
+    int size() {
+        return sessions.size();
+    }
+
     void clear() {
         sessions.clear();
     }

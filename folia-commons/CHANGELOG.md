@@ -15,4 +15,5 @@ All notable changes to folia-commons are documented here. The format follows
 - `ServerVersion`: parses `1.x.y` and calendar-style versions and answers "is this at least 1.N.P".
 - `Legacy`: legacy colour codes to MiniMessage.
 - `Diagnostics`: a pasteable report of server facts and feature status.
+- `LibraryVersion`: reads a library's own version from a build-filled resource, which survives shading.
 - `FoliaEnvironment`: Folia detection.

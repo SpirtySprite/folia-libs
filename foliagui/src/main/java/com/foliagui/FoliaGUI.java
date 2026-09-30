@@ -8,11 +8,6 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Properties;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Entry point of the library.
@@ -113,16 +108,6 @@ public final class FoliaGUI {
     }
 
     private static @NotNull String readVersion() {
-        try (InputStream in = FoliaGUI.class.getResourceAsStream("/foliagui-version.properties")) {
-            if (in == null) {
-                return "unknown";
-            }
-            Properties properties = new Properties();
-            properties.load(in);
-            return properties.getProperty("version", "unknown");
-        } catch (IOException e) {
-            Logger.getLogger(FoliaGUI.class.getName()).log(Level.WARNING, "Failed to read FoliaGUI version metadata", e);
-            return "unknown";
-        }
+        return net.foliacommons.version.LibraryVersion.read(FoliaGUI.class, "/foliagui-version.properties");
     }
 }

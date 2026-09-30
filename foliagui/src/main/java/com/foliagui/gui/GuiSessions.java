@@ -19,6 +19,22 @@ public final class GuiSessions {
         return anvil.has(player) || sign.has(player) || merchant.has(player) || chat.has(player);
     }
 
+    public int anvilCount() {
+        return anvil.size();
+    }
+
+    public int signCount() {
+        return sign.size();
+    }
+
+    public int merchantCount() {
+        return merchant.size();
+    }
+
+    public int chatCount() {
+        return chat.size();
+    }
+
     public void clearAll() {
         anvil.clear();
         for (SignGui gui : sign.values()) {

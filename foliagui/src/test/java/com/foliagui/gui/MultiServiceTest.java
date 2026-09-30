@@ -3,6 +3,7 @@ package com.foliagui.gui;
 import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUINotInitialisedException;
 import com.foliagui.FoliaGUIService;
+import com.foliagui.FoliaGUIStats;
 import com.foliagui.builder.item.ItemBuilder;
 import org.bukkit.Material;
 import org.bukkit.plugin.Plugin;
@@ -193,5 +194,30 @@ class MultiServiceTest {
 
         assertSame(custom, other.theme());
         assertNotSame(custom, FoliaGUI.service().theme());
+    }
+
+    @Test
+    void statsCountOpenGuisAndSessionsPerService() {
+        Gui gui = Gui.builder().rows(1).title("&8Stats").service(other).create();
+        open(gui);
+        ChatPrompt.ask(other, server.addPlayer(), "&eSay something:", 0, answer -> {
+        });
+
+        FoliaGUIStats stats = other.stats();
+
+        assertEquals(1, stats.openGuis());
+        assertEquals(1, stats.chatPrompts());
+        assertEquals(2, stats.total());
+        assertEquals(0, FoliaGUI.service().stats().total(), "the default service saw none of it");
+    }
+
+    @Test
+    void diagnoseDescribesTheServiceAndItsFeatures() {
+        String report = other.diagnose().toString();
+
+        assertTrue(report.contains("FoliaGUI " + FoliaGUI.VERSION));
+        assertTrue(report.contains("Owner plugin: " + otherOwner.getName()));
+        assertTrue(report.contains("[ok] Inventory GUIs"));
+        assertTrue(report.contains("Open GUIs: 0"));
     }
 }

@@ -22,6 +22,7 @@ import java.util.UUID;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -242,5 +243,26 @@ class FoliaBoardTest {
         assertSame(plugin, board.plugin());
         assertNotNull(board.placeholders());
         assertNotEquals(board.plugin().getName(), "");
+    }
+
+    @Test
+    void diagnoseListsTheFeaturesAndTheRuntimeState() {
+        FoliaBoard board = board("Shop");
+        board.boards().sidebar(player);
+
+        String report = board.diagnose().toString();
+
+        assertTrue(report.contains("FoliaBoard " + FoliaBoard.VERSION));
+        assertTrue(report.contains("Packet layer:"));
+        assertTrue(report.contains("[ok] Sidebars"));
+        assertTrue(report.contains("Sidebars: 1"), report);
+    }
+
+    @Test
+    void diagnoseFlagsTabFeaturesTheServerDoesNotSupport() {
+        FoliaBoard board = board("Shop");
+
+        assertFalse(board.diagnose().healthy(), "a mocked adapter has no per-viewer tab support");
+        assertTrue(board.diagnose().problems().contains("Per-viewer tab names"));
     }
 }

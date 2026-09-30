@@ -6,6 +6,14 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `NpcData.builder()` and `NpcData#toBuilder()`: build and copy snapshots without a 21-argument constructor.
+- `NpcData#serialize()`, `NpcData.deserialize(map)` and `NpcDataCodec`: a versioned, forgiving map format
+  for storing NPC snapshots in YAML, JSON or a database.
+
+### Deprecated
+- The `NpcData` constructors. Use `NpcData.builder()`. They still work and will not be removed before 2.0.
+
 ### Fixed
 - Players riding a vehicle now keep their tracked position up to date (via `VehicleMoveEvent`), so NPCs
   spawn and despawn for them while they ride. Movement of a rider is not reported as player movement.

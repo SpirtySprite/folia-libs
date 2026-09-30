@@ -847,10 +847,14 @@ public final class NpcImpl implements Npc {
 
     @Override
     public NpcData data() {
-        return new NpcData(uuid, name, type, position.world(),
-                position.x(), position.y(), position.z(), position.yaw(), position.pitch(),
-                lookAtPlayers, skin, mirrorSkin, Map.copyOf(equipment), nametag, appearance(), pose,
-                baby, showInTabList, mobVariant, owner, nametagStyle);
+        return NpcData.builder()
+                .id(uuid).name(name).type(type)
+                .position(position.world(), position.x(), position.y(), position.z(), position.yaw(), position.pitch())
+                .lookAtPlayers(lookAtPlayers).skin(skin).mirrorSkin(mirrorSkin)
+                .equipment(equipment).nametag(nametag).appearance(appearance()).pose(pose)
+                .baby(baby).showInTabList(showInTabList).mobVariant(mobVariant).owner(owner)
+                .nametagStyle(nametagStyle)
+                .build();
     }
 
     @Override

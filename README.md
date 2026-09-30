@@ -766,12 +766,50 @@ List<NpcData> saved = npcs.saveAll();   // typically on shutdown; or npc.data() 
 npcs.spawnAll(saved);                   // typically on startup; or npcs.spawn(data) for just one
 ```
 
-`NpcData` is a plain record of primitive/simple values (id, name, type, world/x/y/z/yaw/pitch, skin,
+`NpcData` is a plain record of simple values (id, name, type, world/x/y/z/yaw/pitch, skin,
 mirror-skin flag, equipment map, nametag lines, appearance, pose, baby flag, tab-list flag, mob
-variant, owner, nametag style), so it serializes cleanly with whatever you already use: Gson, Jackson, a config
-library, a database row mapper, anything that can handle a POJO/record. Re-spawning from a saved
-`NpcData` **keeps the original id**, so anything you have keyed on `npc.id()` elsewhere in your own
-data still matches up correctly after a server restart.
+variant, owner, nametag style). Re-spawning from a saved `NpcData` **keeps the original id**, so anything
+you have keyed on `npc.id()` elsewhere in your own data still matches up correctly after a server restart.
+
+### Building and changing snapshots
+
+Build them with the builder. Every option has a sensible default, so you only set what matters, and code
+written this way keeps compiling when new options are added (the long constructors still work but are
+deprecated for that reason):
+
+```java
+NpcData data = NpcData.builder()
+        .name("Shopkeeper")
+        .position("world", 10.5, 64, -3, 90f, 0f)
+        .skin(skin)
+        .nametag("<gold>Shop", "<gray>Right-click")
+        .build();
+
+NpcData renamed = data.toBuilder().name("Banker").build();   // copy with one change
+```
+
+### Writing them to disk
+
+`data.serialize()` turns a snapshot into plain maps, lists and primitives, which any YAML, JSON or
+database layer can store, and `NpcData.deserialize(map)` reads it back:
+
+```java
+Map<String, Object> map = npc.data().serialize();     // put this in your config or database
+NpcData restored = NpcData.deserialize(map);
+```
+
+The format carries a `schema` number. Reading is deliberately forgiving so old saves keep loading after
+an upgrade: missing keys use defaults, unknown keys are ignored, unknown enum names (an entity type
+removed in a newer Minecraft, say) fall back to the default, and numbers may come back as ints, longs or
+strings the way YAML and JSON parsers return them. To find out what was guessed, use the overload that
+reports it:
+
+```java
+NpcData restored = NpcDataCodec.fromMap(map, message -> getLogger().warning("NPC data: " + message));
+```
+
+Equipment is stored with Bukkit's own `ItemStack` serialization, so it needs a running server to read
+back. An item that cannot be read is skipped with a warning rather than failing the whole NPC.
 
 `npc.owner(uuid)` / `npc.owner()` attach whoever the NPC is attributed to — typically its creator. This
 is **purely informational**: FoliaNPC itself never reads this value for any permission decision, view

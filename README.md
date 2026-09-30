@@ -45,6 +45,28 @@ The libraries are published through [JitPack](https://jitpack.io). Use the group
 Each library's README has the details, including the `plugin.yml` setting Folia needs
 (`folia-supported: true`).
 
+## Compatibility
+
+Every push is tested by starting real servers with a plugin that contains all four libraries (shaded and
+relocated, like your own plugin would). On 1.21.8 and 1.21.11 a headless client also joins, and the tests check
+that it receives the sidebar, the NPC and the menu, and that its clicks on the menu and the NPC reach the library.
+
+| Server | Minecraft | Tested |
+|---|---|---|
+| Paper | 1.20.6, 1.21.4, 1.21.8, 1.21.11 | yes |
+| Folia | 1.20.6, 1.21.4, 1.21.8, 1.21.11 | yes |
+
+Some features need a newer server than the rest of the library. A library reports them in its diagnostics
+(`diagnose()`) and keeps working without them:
+
+| Feature | Needs | Library |
+|---|---|---|
+| Tab list ordering | Paper 1.21.2 or newer | FoliaBoard |
+| Anvil text input | Paper 1.21 or newer | FoliaGUI |
+| Sign text input | a Paper version with `UncheckedSignChangeEvent` (present on 1.21.8, missing on 1.21.4) | FoliaGUI |
+
+Versions between the tested ones probably work but are not tested. Other Minecraft versions are not supported.
+
 ## Performance
 
 These figures come from automated benchmarks that you can run yourself (see [benchmarks/](benchmarks/README.md)).

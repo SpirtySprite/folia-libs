@@ -36,6 +36,16 @@
         </repository>
     </repositories>
 
+    <profiles>
+        <!-- The benchmarks take a while to build and are not part of a normal build: mvn -Pbenchmarks ... -->
+        <profile>
+            <id>benchmarks</id>
+            <modules>
+                <module>benchmarks</module>
+            </modules>
+        </profile>
+    </profiles>
+
     <build>
         <plugins>
             <plugin>

@@ -1,0 +1,44 @@
+name: Benchmarks
+
+# Run by hand from the Actions tab. Shared runners are noisy, so use this for a rough check and keep
+# reference numbers from a quiet machine in benchmarks/results/.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'full, quick or smoke'
+        required: true
+        default: 'quick'
+      filter:
+        description: 'Only run benchmarks matching this regular expression (optional)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build the benchmark jar
+        run: mvn -B -ntp -Pbenchmarks package -DskipTests -pl benchmarks -am
+      - name: Run
+        env:
+          LABEL: ci-${{ github.run_number }}
+          FILTER: ${{ inputs.filter }}
+          PROFILE: '1'
+        run: benchmarks/scripts/run.sh "${{ inputs.mode }}"
+      - name: Show the report
+        run: cat "benchmarks/results/ci-${{ github.run_number }}.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/ci-${{ github.run_number }}.*

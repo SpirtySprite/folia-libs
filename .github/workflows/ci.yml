@@ -48,3 +48,19 @@ jobs:
           java-version: '21'
           cache: maven
       - run: mvn -B -ntp verify -pl foliagui -am
+
+  # Not a measurement: proves every benchmark still builds and runs, so they do not rot.
+  benchmarks-smoke:
+    name: Benchmarks still run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B -ntp -Pbenchmarks package -DskipTests -pl benchmarks -am
+      - run: benchmarks/scripts/run.sh smoke
+        env:
+          LABEL: ci-smoke

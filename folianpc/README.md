@@ -40,9 +40,12 @@ no chunk ticket, no persistence in the level data.
 That has three consequences worth understanding up front, because they explain almost every behavior
 described later in this document:
 
-1. **It's cheap.** An NPC nobody is looking at costs nothing beyond a map entry. Ten thousand NPCs
-   spread across a large world cost roughly what the *visible* subset costs, not what all ten thousand
-   would cost as real entities.
+1. **It's cheap compared to real entities, but not free.** There is no entity ticking, no AI and no chunk
+   ticket, so an NPC costs far less than a mob. What it does cost is one distance check against every
+   online player, about 10 nanoseconds each, every 2 ticks. That makes a pass take roughly
+   `NPCs x players x 10 ns`: 1,000 NPCs with 100 players is about 1 ms, while 10,000 NPCs with 500 players
+   is about 50 ms, which is too much for one thread. The cost depends on how many NPCs exist, not how many
+   are visible. See [Performance](../README.md#performance) for measured numbers.
 2. **It works cleanly on Folia.** Folia's whole model is built around real entities and players each
    being owned by exactly one region thread, and code touching one from the wrong thread throws or
    corrupts state. A library with no real entities has nothing Folia needs to protect it from — the

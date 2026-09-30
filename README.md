@@ -155,6 +155,23 @@ server will be somewhat slower.
 | Read a Minecraft version string | 0.54 µs |
 | Build and print a diagnostics report | 0.5–2.2 µs |
 
+### The same benchmarks on a desktop PC
+
+The same quick run on a Windows desktop (16 logical CPUs, JDK 25), next to the GitHub runner. Full report:
+[`windows-16cpu-quick.md`](benchmarks/results/windows-16cpu-quick.md).
+
+| What | GitHub runner (4 CPUs) | Desktop PC (16 CPUs) |
+|---|---:|---:|
+| NPC pass, 1,000 NPCs, 100 players | 0.9 ms | 0.74 ms |
+| NPC pass, 10,000 NPCs, 100 players | 9.9 ms | 7.7 ms |
+| NPC pass, 10,000 NPCs, 500 players | 47.8 ms | 40.9 ms |
+| Walking route, 64 blocks | 0.9–1.2 ms | 0.75–0.99 ms |
+| Change one sidebar line (15 lines) | 0.14–0.27 µs | 0.27 µs |
+| Turn a GUI page | 0.3–0.45 ms | 0.24–0.33 ms |
+
+The two machines agree to within about 20%, so the conclusions above do not depend on the hardware. More CPU cores
+do not help here, because one pass runs on one thread.
+
 ### What these numbers do not cover
 
 - **Sending packets.** Real server work for building and sending packets is not included.

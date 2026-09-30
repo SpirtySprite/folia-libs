@@ -3,6 +3,7 @@
 | File | What it is |
 |---|---|
 | `github-runner-quick.md` / `.json` | Quick-mode run on GitHub's shared `ubuntu-latest` runner (4 vCPUs). These are the figures quoted in the top-level README. |
+| `windows-16cpu-quick.md` | Quick-mode run on a Windows desktop PC (AMD64, 16 logical CPUs, JDK 25), made with the same commands. Used for the comparison in the top-level README. |
 
 `github-runner-quick.json` combines two runs of the **Benchmarks** workflow, both on the same kind of runner:
 the first run covered every benchmark; its pathfinding results were then replaced by a second run of only the

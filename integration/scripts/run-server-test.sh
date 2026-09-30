@@ -3,6 +3,10 @@
 #
 #   integration/scripts/run-server-test.sh <paper|folia> <minecraft-version> [plugin-jar]
 #
+# With BOT_JAR=<path to folia-integration-bot.jar> a headless client also joins the server, and the script checks
+# the packets it received (sidebar, NPC, menu). Build it with `mvn -Pintegration package -DskipTests
+# -pl integration-bot -am`; choose the client's protocol with -Dmcprotocollib.version=<version>.
+#
 # Example: integration/scripts/run-server-test.sh folia 1.21.4
 #
 # The server jar is downloaded from PaperMC (https://fill.papermc.io) and cached in
@@ -13,7 +17,7 @@
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 fi
 
@@ -73,7 +77,8 @@ cp "$SERVER_JAR" "$RUN/server.jar"
 echo "eula=true" > "$RUN/eula.txt"
 cat > "$RUN/server.properties" <<'PROPS'
 online-mode=false
-server-port=0
+server-port=__PORT__
+enforce-secure-profile=false
 level-type=minecraft\:flat
 generate-structures=false
 spawn-protection=0
@@ -87,15 +92,38 @@ spawn-animals=false
 spawn-npcs=false
 PROPS
 
+PORT="${IT_PORT:-25599}"
+sed -i.bak "s/__PORT__/$PORT/" "$RUN/server.properties" && rm -f "$RUN/server.properties.bak"
+BOT_JAR="${BOT_JAR:-}"
+BOT_FLAG=false
+if [ -n "$BOT_JAR" ]; then
+  [ -f "$BOT_JAR" ] || { echo "Bot jar not found: $BOT_JAR" >&2; exit 2; }
+  BOT_FLAG=true
+fi
+
 echo "Starting $PROJECT $VERSION (timeout ${TIMEOUT_SECONDS}s)"
 set +e
 (
   cd "$RUN"
   exec java -Xmx1G -Dcom.mojang.eula.agree=true \
-    -Dit.expect.folia="$EXPECT_FOLIA" -Dit.expect.version="$VERSION" \
+    -Dit.expect.folia="$EXPECT_FOLIA" -Dit.expect.version="$VERSION" -Dit.bot="$BOT_FLAG" \
     -jar server.jar --nogui < /dev/null > server.log 2>&1
 ) &
 SERVER_PID=$!
+
+if [ "$BOT_FLAG" = true ]; then
+  # Let the server finish starting, then join as a player.
+  started=0
+  until grep -q "Done (" "$RUN/server.log" 2>/dev/null || ! kill -0 "$SERVER_PID" 2>/dev/null; do
+    sleep 1
+    started=$((started + 1))
+    if [ "$started" -ge 240 ]; then break; fi
+  done
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "Joining with the test bot"
+    java -jar "$BOT_JAR" 127.0.0.1 "$PORT" "$RUN/bot-result.json" ItBot 100 > "$RUN/bot.log" 2>&1 || true
+  fi
+fi
 
 waited=0
 while kill -0 "$SERVER_PID" 2>/dev/null; do
@@ -135,6 +163,37 @@ for check in result["checks"]:
             print("        " + line)
 sys.exit(1 if failed or not result["passed"] else 0)
 PY
+
+# What the bot, an ordinary client, actually received.
+if [ "$BOT_FLAG" = true ]; then
+  if [ ! -f "$RUN/bot-result.json" ]; then
+    echo "FAILED: the bot never wrote bot-result.json."
+    cat "$RUN/bot.log" 2>/dev/null | tail -n 30
+    exit 1
+  fi
+  python3 - "$RUN/bot-result.json" <<'PY' || STATUS=$?
+import json, sys
+seen = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+
+def need(ok, what):
+    print(f"  {'PASS' if ok else 'FAIL'}  client: {what}")
+    if not ok:
+        problems.append(what)
+
+need(seen["joined"], "joined the server")
+need(seen["disconnectedByServer"] and seen["disconnectReason"] == "integration done", "was sent away by the plugin at the end")
+need(any(line.endswith("| IT Board") for line in seen["objectives"]), "received a sidebar titled 'IT Board'")
+need(any(line.startswith("SIDEBAR") for line in seen["displays"]), "was told to display it in the sidebar slot")
+scores = " ".join(seen["scores"])
+need("Line one" in scores and "Line two" in scores, "received both sidebar lines")
+need(any("| ItNpc |" in line and "ADD_PLAYER" in line for line in seen["playerInfo"]), "received the NPC's player list entry")
+need(any(line.startswith("PLAYER") for line in seen["entities"]), "saw an NPC spawn as a player entity")
+need(any("GENERIC_9X3" in line and "Integration Menu" in line for line in seen["screens"]), "was shown the 3 row menu 'Integration Menu'")
+need(any("container=1" in line and "filled=1" in line for line in seen["containerContents"]), "received the menu's item")
+sys.exit(1 if problems else 0)
+PY
+fi
 
 # Anything the libraries logged as an error is a failure even when every check passed.
 if grep -E "\[FoliaIntegration\].*(SEVERE|ERROR)|^\s+at shaded\.(foliacommons|foliaboard|foliagui|folianpc)" "$RUN/server.log" \

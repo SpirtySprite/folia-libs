@@ -43,6 +43,7 @@
             <id>integration</id>
             <modules>
                 <module>integration</module>
+                <module>integration-bot</module>
             </modules>
         </profile>
         <profile>

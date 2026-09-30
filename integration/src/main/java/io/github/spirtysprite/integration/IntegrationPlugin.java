@@ -15,9 +15,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
 import org.bukkit.entity.EntityType;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.server.ServerLoadEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -60,6 +62,13 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(this, this);
     }
 
+    private final CompletableFuture<Player> firstPlayer = new CompletableFuture<>();
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        firstPlayer.complete(event.getPlayer());
+    }
+
     @EventHandler
     public void onServerLoad(ServerLoadEvent event) {
         if (event.getType() == ServerLoadEvent.LoadType.STARTUP) {
@@ -78,15 +87,22 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         chain = chain.thenCompose(v -> check("gui", this::gui));
         chain = chain.thenCompose(v -> check("npc", this::npc));
         chain = chain.thenCompose(v -> check("npc-tick", this::npcTick));
+        if (Boolean.getBoolean("it.bot")) {
+            chain = chain.thenCompose(v -> check("player-scenario", this::playerScenario, 120));
+        }
         chain = chain.thenCompose(v -> check("shutdown", this::closeEverything));
         chain.whenComplete((ignored, failure) -> finish());
     }
 
     /** Runs one check, records its outcome, and never fails the chain so later checks still run. */
     private CompletableFuture<Void> check(String name, Check body) {
+        return check(name, body, 30);
+    }
+
+    private CompletableFuture<Void> check(String name, Check body, int timeoutSeconds) {
         CompletableFuture<String> result;
         try {
-            result = body.run().orTimeout(30, TimeUnit.SECONDS);
+            result = body.run().orTimeout(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable thrown) {
             result = CompletableFuture.failedFuture(thrown);
         }
@@ -98,7 +114,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                 } else {
                     Throwable cause = failure instanceof java.util.concurrent.CompletionException && failure.getCause() != null
                             ? failure.getCause() : failure;
-                    String reason = cause instanceof TimeoutException ? "timed out after 30 s" : stackTrace(cause);
+                    String reason = cause instanceof TimeoutException ? "timed out after " + timeoutSeconds + " s" : stackTrace(cause);
                     outcomes.add(new Outcome(name, false, reason));
                     getLogger().severe("FAIL " + name + ": " + reason);
                 }
@@ -260,6 +276,49 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             }
         }, 1, 1);
         return result;
+    }
+
+    /**
+     * Waits for the test bot to join, then gives it a sidebar, an NPC and an open menu, waits a moment for the packets
+     * to be sent, and kicks it. The bot writes down what it received and the script checks that file.
+     */
+    private CompletableFuture<String> playerScenario() {
+        return firstPlayer.thenCompose(player -> {
+            CompletableFuture<String> done = new CompletableFuture<>();
+            boolean accepted = scheduler.runForEntity(player, () -> {
+                try {
+                    board.boards().create(player)
+                            .title("<gold>IT Board")
+                            .line("<white>Line one")
+                            .line("<green>Line two")
+                            .build();
+                    Location near = player.getLocation().add(3, 0, 0);
+                    npc.builder().name("ItNpc").location(near).spawn();
+                    Gui menu = Gui.builder().service(gui).rows(3).title("Integration Menu").create();
+                    menu.setItem(13, new com.foliagui.item.GuiItem(org.bukkit.Material.DIAMOND));
+                    menu.open(player);
+                    scheduler.runGlobalTimer(new Runnable() {
+                        private int ticks;
+
+                        @Override
+                        public void run() {
+                            if (++ticks == 100) {
+                                scheduler.runForEntity(player, () -> {
+                                    player.kick(net.kyori.adventure.text.Component.text("integration done"));
+                                    done.complete("sidebar, NPC and menu sent to " + player.getName());
+                                }, () -> done.complete("player left before the scenario ended"));
+                            }
+                        }
+                    }, 1, 1);
+                } catch (Throwable thrown) {
+                    done.completeExceptionally(thrown);
+                }
+            }, () -> done.completeExceptionally(new IllegalStateException("the player left immediately")));
+            if (!accepted) {
+                done.completeExceptionally(new IllegalStateException("runForEntity refused the task"));
+            }
+            return done;
+        });
     }
 
     private CompletableFuture<String> closeEverything() {

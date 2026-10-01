@@ -142,8 +142,18 @@ public final class GuiListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPurchase(io.papermc.paper.event.player.PlayerPurchaseEvent event) {
+        MerchantGui.handlePurchase(service, event);
+    }
+
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        BaseGui open = service.guis().getOpenGui(event.getPlayer());
+        if (open != null) {
+            open.stopAutoUpdate(event.getPlayer());
+        }
+        service.sessions().disconnect(event.getPlayer());
         service.guis().unregister(event.getPlayer());
         service.navigation().clear(event.getPlayer());
         SignGui.handleQuit(service, event.getPlayer());

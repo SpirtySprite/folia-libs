@@ -56,17 +56,24 @@ public final class ChatPrompt {
         if (replaced != null) {
             replaced.abandon(player);
         }
-        player.sendMessage(Text.of(prompt));
+        service.scheduler().runForEntity(player, () -> player.sendMessage(Text.of(prompt)), null);
 
         if (timeoutTicks > 0) {
             TaskHandle[] handle = new TaskHandle[1];
             handle[0] = service.scheduler().runForEntityTimer(player, () -> {
                 handle[0].cancel();
-                if (sessions.chat.remove(player) == session) {
+                if (sessions.chat.remove(player, session)) {
                     callback.accept(null);
                 }
             }, null, timeoutTicks, timeoutTicks);
             session.timeoutTask = handle[0];
+        }
+    }
+
+    void cancelTimeout() {
+        TaskHandle pending = timeoutTask;
+        if (pending != null) {
+            pending.cancel();
         }
     }
 

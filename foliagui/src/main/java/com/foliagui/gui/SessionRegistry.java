@@ -25,6 +25,10 @@ final class SessionRegistry<T> {
         return sessions.remove(player.getUniqueId());
     }
 
+    boolean remove(HumanEntity player, T expected) {
+        return sessions.remove(player.getUniqueId(), expected);
+    }
+
     boolean has(@NotNull HumanEntity player) {
         return sessions.containsKey(player.getUniqueId());
     }

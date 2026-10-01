@@ -36,6 +36,7 @@ public final class AnvilGui {
     private final BiFunction<Player, String, Response> onComplete;
     private final Consumer<Player> onClose;
     private final boolean forceOpen;
+    private volatile Inventory openedInventory;
     private final Set<UUID> allowedCloses = ConcurrentHashMap.newKeySet();
 
     private AnvilGui(Builder builder) {
@@ -65,25 +66,62 @@ public final class AnvilGui {
     }
 
     public void open(@NotNull Player player) {
+        openAsync(player);
+    }
+
+    /** Opens on the player's owning thread and reports unsupported presentation failures exceptionally. */
+    @ApiStatus.Experimental
+    public java.util.concurrent.CompletableFuture<GuiOperationResult> openAsync(@NotNull Player player) {
+        var result = new java.util.concurrent.CompletableFuture<GuiOperationResult>();
         FoliaGUIService owner = service();
+        if (owner.isClosed()) {
+            result.complete(GuiOperationResult.REJECTED);
+            return result;
+        }
         owner.scheduler().runForEntity(player, () -> {
-            AnvilView view = MenuType.ANVIL.create(player, title);
-            view.setRepairCost(0);
-            view.setMaximumRepairCost(Integer.MAX_VALUE);
-            Inventory top = view.getTopInventory();
-            top.setItem(0, leftItem);
-            if (rightItem != null) {
-                top.setItem(1, rightItem);
+            try {
+                if (owner.isClosed()) {
+                    result.complete(GuiOperationResult.REJECTED);
+                    return;
+                }
+                AnvilView view = MenuType.ANVIL.create(player, title);
+                view.setRepairCost(0);
+                view.setMaximumRepairCost(Integer.MAX_VALUE);
+                Inventory top = view.getTopInventory();
+                openedInventory = top;
+                top.setItem(0, leftItem);
+                if (rightItem != null) {
+                    top.setItem(1, rightItem);
+                }
+                owner.sessions().anvil.put(player, this);
+                player.openInventory(view);
+                if (player.getOpenInventory().getTopInventory() != top) {
+                    owner.sessions().anvil.remove(player, this);
+                    result.complete(GuiOperationResult.REJECTED);
+                    return;
+                }
+                result.complete(GuiOperationResult.OPENED);
+            } catch (RuntimeException | LinkageError failure) {
+                result.completeExceptionally(failure);
             }
-            owner.sessions().anvil.put(player, this);
-            player.openInventory(view);
-        }, null);
+        }, () -> result.complete(GuiOperationResult.RETIRED));
+        return result;
+    }
+
+    void cancel(Player player) {
+        if (service().sessions().anvil.remove(player, this)) {
+            service().scheduler().runForEntity(player, () -> {
+                if (player.getOpenInventory().getTopInventory() == openedInventory) {
+                    player.closeInventory();
+                }
+            }, null);
+        }
     }
 
     @ApiStatus.Internal
     public static boolean handleClick(@NotNull FoliaGUIService service, @NotNull InventoryClickEvent event) {
         AnvilGui gui = service.sessions().anvil.get(event.getWhoClicked());
-        if (gui == null || !(event.getView() instanceof AnvilView view)) {
+        if (gui == null || gui.openedInventory != event.getView().getTopInventory() || !(event.getView() instanceof AnvilView view)) {
             return false;
         }
         event.setCancelled(true);
@@ -101,7 +139,7 @@ public final class AnvilGui {
     @ApiStatus.Internal
     public static boolean handleDrag(@NotNull FoliaGUIService service, @NotNull InventoryDragEvent event) {
         AnvilGui gui = service.sessions().anvil.get(event.getWhoClicked());
-        if (gui == null) {
+        if (gui == null || gui.openedInventory != event.getView().getTopInventory()) {
             return false;
         }
         event.setCancelled(true);
@@ -117,8 +155,9 @@ public final class AnvilGui {
     @ApiStatus.Internal
     public static boolean handleClose(@NotNull FoliaGUIService service, @NotNull InventoryCloseEvent event) {
         HumanEntity player = event.getPlayer();
-        AnvilGui gui = service.sessions().anvil.remove(player);
-        if (gui == null) {
+        AnvilGui gui = service.sessions().anvil.get(player);
+        if (gui == null || gui.openedInventory != event.getInventory()
+                || !service.sessions().anvil.remove(player, gui)) {
             return false;
         }
         boolean allowed = gui.allowedCloses.remove(player.getUniqueId());
@@ -134,7 +173,11 @@ public final class AnvilGui {
     private void apply(@NotNull Player player, @NotNull AnvilView view, @NotNull Response response) {
         if (response.close) {
             allowedCloses.add(player.getUniqueId());
-            service().scheduler().runForEntity(player, player::closeInventory, null);
+            service().scheduler().runForEntity(player, () -> {
+                if (player.getOpenInventory().getTopInventory() == view.getTopInventory()) {
+                    player.closeInventory();
+                }
+            }, null);
         } else if (response.newText != null) {
             ItemStack left = view.getTopInventory().getItem(0);
             if (left != null) {

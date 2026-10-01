@@ -480,12 +480,16 @@ A real villager trade window, backed by `Bukkit.createMerchant`, with your own r
 MerchantGui.builder()
         .title("&2Blacksmith")
         .addRecipe(new ItemStack(Material.DIAMOND_SWORD), List.of(new ItemStack(Material.EMERALD, 5)))
-        .onTrade((player, recipe) -> player.sendMessage("Thanks for your business!"))
+        .onPurchase((player, recipe) -> player.sendMessage("Thanks for your business!"))
         .onClose(player -> player.sendMessage("Come back soon."))
         .open(player);
 ```
 
-Vanilla trading mechanics (taking ingredients, giving the result) run exactly as they would with a real villager. `onTrade` fires once vanilla has already applied the trade.
+Vanilla trading mechanics handle ingredients and results. `onResultClick` observes a result-slot
+click; it does not prove that a purchase occurred. `onPurchase` observes a noncancelled Paper
+`PlayerPurchaseEvent` at MONITOR on the player thread. This reports server acceptance and does not
+provide a persistence receipt. The legacy `onTrade` click callback remains available and is deprecated
+in favor of these explicit names.
 
 ### Navigation and themes
 
@@ -885,3 +889,203 @@ Maven repository.
 ## License
 
 MIT. See the [LICENSE](../LICENSE) at the root of the repository.
+
+## Session and catalogue controls
+
+The additions in this section are experimental. Existing stable signatures remain available.
+A GUI instance has one viewer at a time. A concurrent open for another player is rejected before
+rendering or inventory access. Use a factory for separate player instances:
+
+```java
+BaseGui.openFor(service, player, viewer -> Gui.of(3, "Shop"));
+menu.openAsync(player).thenAccept(outcome -> plugin.getLogger().info(outcome.name()));
+menu.closeAsync(player);
+```
+
+Opening an already active menu redraws without replacing its session. Open and close futures report
+opened, closed, rejected or retired scheduling. Execution failures complete exceptionally. Closing a
+GUI cannot close a newer unrelated window. Close the service while its plugin can still schedule
+viewer cleanup. Service shutdown always clears retained state; a disabled owner cannot promise
+client-side window closure.
+
+`AsyncContent.loadAsync` reports completion and rejects older requests and results arriving after
+close, quit or service shutdown. Loading placeholders are owned by each request and do not remove
+controls installed by application code:
+
+```java
+AsyncContent.loadAsync(menu, player, () -> repository.findEntries(), entries -> {
+    menu.setItem(0, renderEntry(entries.getFirst()));
+}, failure -> plugin.getLogger().warning(failure.toString()));
+```
+
+Storage redraws and title changes preserve deposits. Read fresh, isolated contents from any thread:
+
+```java
+storage.updateTitle("Deposit items");
+storage.storageContentsAsync().thenAccept(contents -> saveLater(contents));
+storage.setStorageContents(savedContents);
+```
+
+The deprecated synchronous `getStorageContents` returns current contents on the owner thread and
+the latest captured snapshot elsewhere. `getStoredItems` has the same freshness contract. Inventory
+and item handles returned by Bukkit remain mutable handles; schedule external reads or mutations
+on their owning thread. Serialized inventories reject negative or excessive counts, truncated item
+bytes, unexpected objects and trailing data. Limits are 4096 items and 16 MiB of decoded data.
+
+Pagination counts and renders with the same effective capacity, including reserved control slots.
+Supplier caching retains at most eight effective pages by default. Zero disables caching:
+
+```java
+catalogue.cachePages(4);
+catalogue.invalidateItem(12);
+catalogue.invalidatePage(2);
+catalogue.replacePageItem(0, replacement);
+catalogue.removePageItem(obsolete);
+List<GuiItem> entries = catalogue.pageItemsSnapshot();
+Map<Integer, GuiItem> slots = menu.guiItemsSnapshot();
+```
+
+Snapshot collections reject structural mutations. Their `GuiItem` values retain mutable item
+identity. The old mutable collection getters are deprecated; use explicit mutation methods so
+layout invalidation runs. Edit an isolated stack, then request a redraw:
+
+```java
+item.edit(stack -> stack.setAmount(5));
+ItemStack isolated = item.itemStackSnapshot();
+menu.update();
+```
+
+Legacy mutations through `getItemStack` are still detected during redraw. Do not concurrently
+mutate a returned live stack. The edit operation preserves click actions and item identity.
+
+`PageView` defaults to resetting position after rebuilding. Other policies preserve page or a
+selected entry, with page fallback if that entry disappears:
+
+```java
+PageView<Product> view = catalogue.view(products, this::renderProduct);
+view.positionPolicy(PageView.PositionPolicy.KEEP_SELECTED).selected(selectedProduct);
+view.filter(Product::available).sort(Comparator.comparing(Product::price));
+```
+
+Remote catalogues fetch only a requested page. Fetch callbacks run asynchronously; renderer
+callbacks run on the player thread. Request identity rejects superseded responses and closed
+sessions. Close the controller when finished, and use its refresh future to observe failures:
+
+```java
+RemotePages<Product> remote = catalogue.remotePages(player,
+    request -> repository.page(request.page(), request.capacity()), this::renderProduct);
+remote.refresh();
+remote.close();
+```
+
+The repository returns `CompletionStage<RemotePages.Page<Product>>`, carrying page entries and
+the total catalogue size. Entries must fit the requested capacity and catalogue bounds. The
+controller retains one page of fetched data rather than the whole catalogue.
+
+Search keys are normalized once. Default matching accepts multiple terms in any order and aliases:
+
+```java
+searchMenu.addSearchableItem(item, "Diamond sword");
+searchMenu.searchKey(item, "Diamond sword", "weapon", "blade");
+searchMenu.searchAsync(player, "blade diamond", 4);
+searchMenu.replaceSearchableItem(item, replacement, "Iron sword");
+searchMenu.removeSearchableItem(replacement);
+```
+
+Asynchronous searches debounce requests and match catalogue snapshots away from region rendering.
+Custom matchers used there must be pure and thread-safe. Synchronous `search` is retained for small
+catalogues. Only the newest request for the active menu can replace its results.
+
+## Managed input and forms
+
+`TextInput` unifies chat, sign and anvil results. AUTO tries supported anvil, then sign, then chat.
+An explicit unavailable mode reports unsupported input. Native presentation failures advance to
+the next configured fallback. Overall timeout includes retries; zero disables timeout:
+
+```java
+TextInput amount = TextInput.builder().prompt("Enter an amount")
+    .fallback(TextInput.Mode.ANVIL, TextInput.Mode.SIGN, TextInput.Mode.CHAT)
+    .validate(InputValidator.nonblank("Please enter an amount")
+        .and(InputValidator.number(1, 64, "Choose a number from 1 to 64")))
+    .timeout(1200).build();
+InputSession session = amount.open(service, player);
+session.result().thenAccept(result -> {
+    if (result.status() == InputResult.Status.SUBMITTED) {
+        acceptAmount(result.text().orElseThrow());
+    }
+});
+session.cancel();
+```
+
+Results distinguish submitted, cancelled, timed out, disconnected, unsupported and failed.
+Replacing a managed input cancels its predecessor. Shutdown and retirement complete pending
+results instead of leaving callers waiting. Validation supplies visible feedback and retries;
+`length`, `nonblank`, `number` and `matching` validators compose with `and`. Numeric validation
+rejects NaN and infinity. Normal submission callbacks run on the player thread; retirement and
+shutdown outcomes may complete elsewhere, so schedule player access in observers of those outcomes.
+
+Forms parse named steps into a typed result and can restore the originating menu:
+
+```java
+record Order(String customer, int amount) { }
+TextInput name = TextInput.builder().mode(TextInput.Mode.CHAT).prompt("Customer name")
+    .validate(InputValidator.nonblank("A name is required")).build();
+InputForm<Order> form = InputForm.<Order>builder(values ->
+    new Order((String) values.get("customer"), (Integer) values.get("amount")))
+    .step("customer", name, text -> text)
+    .step("amount", amount, Integer::parseInt)
+    .restoreMenu(true).build();
+InputForm<Order>.Session order = form.open(service, player);
+order.back();
+order.result().thenAccept(result -> result.value().ifPresent(this::saveOrderLater));
+order.close();
+```
+
+Back navigation discards the previous step and later values. Parser failures display feedback and
+retry the current step. Recipes are immutable and create independent session state per player.
+
+## Player presentation and execution contexts
+
+Resolve themes on the player thread for locale, accessibility or resource-pack choices. Each theme
+can customize built-in controls, search/page prompts, loading states and quantity labels:
+
+```java
+GuiTheme french = new GuiTheme().messages(key -> switch (key) {
+    case PAGE -> "Page {0} sur {1}";
+    case CONFIRM -> "Confirmer";
+    default -> key.defaultText();
+});
+service.themeResolver(player -> player.locale().getLanguage().equals("fr") ? french : service.theme());
+QuantityGui.builder().service(service).open(player);
+```
+
+Page controls resolve the active viewer's theme. Quantity open schedules player-aware construction;
+`QuantityGui.Builder.build(player)` is available within an existing owner-thread callback.
+The built-in service returns its default theme for off-thread `theme(player)` calls; managed menus
+resolve and retain player presentation on the owner thread. Use `ThemeSound.play(service, viewer)`
+for sound playback from an arbitrary thread when working with an explicit service. GUI
+navigation rejects targets owned by another service. Back and close operations dispatch player
+access through the scheduler.
+
+| API group | Immediate work | Scheduled work and callback context |
+|---|---|---|
+| Item builders, GUI recipes, map/list setters | Detached item or recipe state | No player/world reads; callers must not concurrently mutate supplied live stacks |
+| `open`, `openAsync`, `close`, `closeAsync` | Reservation and completion state | Inventory opening, sleeping checks and closing on player thread |
+| `update`, `updateItem`, `updateTitle` | Desired recipe changes | Active inventory rendering and storage transfer on player thread; detached inventories mutate under an instance lock |
+| Storage reads | Latest captured copy for legacy off-thread reads | `storageContentsAsync` reads and clones fresh contents on owner thread |
+| Pagination and `PageView` | Catalogue and position state | Supplier item rendering during owner-thread redraw |
+| Async content and remote pages | Request identity | Fetch off-thread; apply and render on player thread |
+| Async search | Request identity and debounce | Pure matching off-thread; accepted results applied on player thread |
+| Chat, anvil and sign input | Session registry state | Player presentation and callbacks on player thread; sign block snapshots on location thread |
+| Theme providers, form parsers and validators | Immutable recipes | Player-dependent resolution, validation and parsing during owner-thread presentation |
+| Navigation | History state | Window operations on player thread |
+| Raw `getInventory`, `getItemStack` and custom actions | Live handle access | Consumers schedule Bukkit reads/writes themselves; snapshot and managed edit APIs avoid shared mutable handles |
+| Scheduler acceptance helpers | `tryRunAsync`, `tryRunForLocation` report dispatch acceptance | Work runs through folia-commons; refused dispatch terminates managed futures |
+
+The scheduler acceptance helpers are useful when an application also needs to observe rejected work:
+
+```java
+boolean accepted = service.scheduler().tryRunAsync(() -> refreshDetachedCache());
+service.scheduler().tryRunForLocation(location, () -> captureOwnedBlockState(location));
+new GuiTheme.ThemeSound(Sound.UI_BUTTON_CLICK, 0.5f, 1.2f).play(service, player);
+```

@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
 @ApiStatus.Internal
 public final class GuiSessions {
 
+    final SessionRegistry<InputSession> input = new SessionRegistry<>();
     final SessionRegistry<AnvilGui> anvil = new SessionRegistry<>();
     final SessionRegistry<SignGui> sign = new SessionRegistry<>();
     final SessionRegistry<MerchantGui> merchant = new SessionRegistry<>();
@@ -35,7 +36,20 @@ public final class GuiSessions {
         return chat.size();
     }
 
+    public void disconnect(org.bukkit.entity.Player player) {
+        InputSession session = input.get(player);
+        if (session != null) {
+            session.finish(InputResult.ended(InputResult.Status.DISCONNECTED));
+        }
+        anvil.remove(player);
+        merchant.remove(player);
+    }
+
     public void clearAll() {
+        for (InputSession session : input.values()) {
+            session.finish(InputResult.ended(InputResult.Status.CANCELLED));
+        }
+        input.clear();
         anvil.clear();
         for (SignGui gui : sign.values()) {
             gui.cancelTimeout();

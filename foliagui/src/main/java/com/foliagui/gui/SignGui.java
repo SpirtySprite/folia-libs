@@ -39,7 +39,7 @@ public final class SignGui {
 
     private SignGui(Builder builder) {
         this.service = builder.service;
-        this.lines = builder.lines;
+        this.lines = List.copyOf(builder.lines);
         this.initialText = builder.lines.stream()
                 .map(PlainTextComponentSerializer.plainText()::serialize)
                 .collect(Collectors.toList());
@@ -72,27 +72,94 @@ public final class SignGui {
     }
 
     public void open(@NotNull Player player) {
+        openAsync(player);
+    }
+
+    /** Opens on the player's owning thread and reports unsupported presentation failures exceptionally. */
+    @ApiStatus.Experimental
+    public java.util.concurrent.CompletableFuture<GuiOperationResult> openAsync(@NotNull Player player) {
+        var result = new java.util.concurrent.CompletableFuture<GuiOperationResult>();
         FoliaGUIService owner = service();
-        owner.scheduler().runForEntity(player, () -> {
-            Location pos = position.apply(player);
-            this.openedAt = pos;
-            this.original = pos.getBlock().getBlockData();
+        if (owner.isClosed()) {
+            result.complete(GuiOperationResult.REJECTED);
+            return result;
+        }
+        owner.scheduler().runForEntity(player, () -> prepare(player, owner, result),
+                () -> result.complete(GuiOperationResult.RETIRED));
+        return result;
+    }
+
+    private void prepare(Player player, FoliaGUIService owner,
+                         java.util.concurrent.CompletableFuture<GuiOperationResult> result) {
+        try {
+            if (owner.isClosed()) {
+                result.complete(GuiOperationResult.REJECTED);
+                return;
+            }
+            Location pos = java.util.Objects.requireNonNull(position.apply(player), "position").clone();
+            SignGui previous = owner.sessions().sign.put(player, this);
+            if (previous != null && previous != this) {
+                previous.cancelTimeout();
+                previous.revert(player);
+            }
+            if (!owner.scheduler().tryRunForLocation(pos, () -> capture(player, owner, pos, result))) {
+                owner.sessions().sign.remove(player, this);
+                result.complete(GuiOperationResult.REJECTED);
+            }
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+        }
+    }
+
+    private void capture(Player player, FoliaGUIService owner, Location pos,
+                         java.util.concurrent.CompletableFuture<GuiOperationResult> result) {
+        try {
+            BlockData originalBlock = pos.getBlock().getBlockData();
+            owner.scheduler().runForEntity(player, () -> present(player, owner, pos, originalBlock, result),
+                    () -> result.complete(GuiOperationResult.RETIRED));
+        } catch (RuntimeException failure) {
+            owner.sessions().sign.remove(player, this);
+            result.completeExceptionally(failure);
+        }
+    }
+
+    private void present(Player player, FoliaGUIService owner, Location pos, BlockData originalBlock,
+                         java.util.concurrent.CompletableFuture<GuiOperationResult> result) {
+        try {
+            if (owner.isClosed() || owner.sessions().sign.get(player) != this) {
+                result.complete(GuiOperationResult.SUPERSEDED);
+                return;
+            }
+            openedAt = pos;
+            original = originalBlock;
             player.sendBlockChange(pos, SIGN_BLOCK);
             player.sendSignChange(pos, lines);
-            owner.sessions().sign.put(player, this);
             player.openVirtualSign(pos, SIDE);
-
             if (timeoutTicks > 0) {
-                TaskHandle[] handle = new TaskHandle[1];
-                handle[0] = owner.scheduler().runForEntityTimer(player, () -> {
-                    handle[0].cancel();
-                    if (owner.sessions().sign.remove(player) == this) {
+                timeoutTask = owner.scheduler().runForEntityTimer(player, () -> {
+                    if (owner.sessions().sign.remove(player, this)) {
+                        cancelTimeout();
                         revert(player);
                     }
                 }, null, timeoutTicks, timeoutTicks);
-                this.timeoutTask = handle[0];
             }
-        }, null);
+            result.complete(GuiOperationResult.OPENED);
+        } catch (RuntimeException | LinkageError failure) {
+            owner.sessions().sign.remove(player, this);
+            revert(player);
+            result.completeExceptionally(failure);
+        }
+    }
+
+    void cancel(Player player) {
+        if (service().sessions().sign.remove(player, this)) {
+            cancelTimeout();
+            if (org.bukkit.Bukkit.getServer().isOwnedByCurrentRegion(player)) {
+                revert(player);
+            } else {
+                service().scheduler().runForEntity(player, () -> revert(player), null);
+            }
+        }
     }
 
     @ApiStatus.Internal
@@ -138,8 +205,8 @@ public final class SignGui {
     }
 
     private void revert(@NotNull Player player) {
-        if (openedAt != null) {
-            player.sendBlockChange(openedAt, original != null ? original : openedAt.getBlock().getBlockData());
+        if (openedAt != null && player.getWorld() == openedAt.getWorld()) {
+            player.sendBlockChange(openedAt, original != null ? original : SIGN_BLOCK);
         }
     }
 

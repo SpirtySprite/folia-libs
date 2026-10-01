@@ -6,6 +6,22 @@ All notable changes to FoliaGUI are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Experimental operation outcomes, per-player menu factories and observable asynchronous content loading.
+- Managed text input with explicit outcomes, native fallback, validators and typed multi-step forms.
+- Player theme resolution and configurable built-in prompt and control messages.
+- Bounded supplier caching, targeted invalidation, remote pages and page-position policies.
+- Search aliases, entry lifecycle operations, debounced asynchronous search and safe collection snapshots.
+- Managed item editing and isolated stack snapshots.
+
+### Fixed
+- Count pages using effective content capacity and reject stale loading or search results.
+- Enforce one viewer per GUI instance and preserve storage deposits across title changes and redraws.
+- Remove prompt sessions conditionally and bind native callbacks to their expected window identity.
+- Separate merchant result clicks from accepted purchases while preserving the deprecated click callback.
+- Validate serialized inventory bounds and malformed item data before allocation.
+- Schedule owner-thread window operations and location-thread sign sampling; terminate refused scheduling.
+
 ### Changed
 - Text parsing and serialization use shared folia-commons primitives, preserving null handling and item italic defaults.
 

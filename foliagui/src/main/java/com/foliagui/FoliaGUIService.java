@@ -31,6 +31,18 @@ public interface FoliaGUIService {
 
     void theme(@NotNull GuiTheme replacement);
 
+    /** Resolves presentation on the player thread. The built-in service returns its default theme when called off-thread. */
+    @ApiStatus.Experimental
+    default @NotNull GuiTheme theme(@NotNull org.bukkit.entity.Player player) {
+        return theme();
+    }
+
+    /** Installs a per-player theme resolver evaluated during player-owned rendering. */
+    @ApiStatus.Experimental
+    default void themeResolver(@NotNull java.util.function.Function<org.bukkit.entity.Player, GuiTheme> resolver) {
+        throw new UnsupportedOperationException("Player themes are not supported by this service");
+    }
+
     /** The GUIs this service currently has open, per player. */
     @NotNull GuiRegistry guis();
 

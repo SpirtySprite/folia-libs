@@ -21,5 +21,19 @@ public interface Scheduler {
 
     void runAsync(@NotNull Runnable task);
 
+    /** Reports acceptance for asynchronous work. Legacy implementations assume acceptance after dispatch. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default boolean tryRunAsync(@NotNull Runnable task) {
+        runAsync(task);
+        return true;
+    }
+
+    /** Reports acceptance for region-owned location work. Legacy implementations assume acceptance after dispatch. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default boolean tryRunForLocation(@NotNull Location location, @NotNull Runnable task) {
+        runForLocation(location, task);
+        return true;
+    }
+
     boolean isFolia();
 }

@@ -269,4 +269,22 @@ class MojangSkinServiceTest {
         service.close();
     }
 
+    @Test
+    void immediatelyCompletedQueuedRequestsDrainWithoutRecursiveStackGrowth() {
+        AtomicInteger started = new AtomicInteger();
+        CompletableFuture<java.net.http.HttpResponse<String>> first = new CompletableFuture<>();
+        var successful = response(200, "{\"properties\":[{\"name\":\"textures\",\"value\":\"V\"}]}", null);
+        MojangSkinService service = new MojangSkinService(request -> started.incrementAndGet() == 1
+                ? first : CompletableFuture.completedFuture(successful));
+        service.limits(4096, 1, 2048);
+        java.util.List<CompletableFuture<Skin>> pending = new java.util.ArrayList<>();
+        for (int index = 0; index < 2000; index++) pending.add(service.byId(UUID.randomUUID()));
+        assertEquals(1, started.get());
+        first.complete(successful);
+        assertEquals(2000, started.get());
+        assertTrue(pending.stream().allMatch(CompletableFuture::isDone));
+        assertTrue(pending.stream().noneMatch(CompletableFuture::isCompletedExceptionally));
+        service.close();
+    }
+
 }

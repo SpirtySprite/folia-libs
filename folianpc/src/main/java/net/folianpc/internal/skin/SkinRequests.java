@@ -19,6 +19,7 @@ final class SkinRequests {
     private int parallel = 4;
     private int capacity = 256;
     private boolean closed;
+    private boolean draining;
 
     SkinRequests(Function<HttpRequest, CompletableFuture<HttpResponse<String>>> sender) { this.sender = sender; }
 
@@ -41,10 +42,14 @@ final class SkinRequests {
     }
 
     private void drain() {
+        synchronized (this) {
+            if (draining) return;
+            draining = true;
+        }
         while (true) {
             Pending pending;
             synchronized (this) {
-                if (closed || active.size() >= parallel || queued.isEmpty()) return;
+                if (closed || active.size() >= parallel || queued.isEmpty()) { draining = false; return; }
                 pending = queued.removeFirst();
                 active.add(pending);
             }

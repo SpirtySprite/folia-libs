@@ -1,5 +1,6 @@
 package com.foliagui.gui;
 
+import com.foliagui.internal.InventoryViews;
 import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUIService;
 import com.foliagui.util.Text;
@@ -65,7 +66,7 @@ public final class MerchantGui {
             merchant.setRecipes(recipes);
             org.bukkit.inventory.InventoryView view = player.openMerchant(merchant, true);
             if (view != null) {
-                opened = new InventoryIdentity(view.getTopInventory());
+                opened = new InventoryIdentity(InventoryViews.top(view));
                 owner.sessions().merchant.put(player, this);
             }
         }, null);
@@ -114,7 +115,7 @@ public final class MerchantGui {
     public static void handlePurchase(FoliaGUIService service, io.papermc.paper.event.player.PlayerPurchaseEvent event) {
         MerchantGui gui = service.sessions().merchant.get(event.getPlayer());
         if (!event.isCancelled() && gui != null && gui.onPurchase != null && gui.opened != null
-                && event.getPlayer().getOpenInventory().getTopInventory() == gui.opened.inventory()) {
+                && InventoryViews.top(event.getPlayer().getOpenInventory()) == gui.opened.inventory()) {
             gui.onPurchase.accept(event.getPlayer(), event.getTrade());
         }
     }

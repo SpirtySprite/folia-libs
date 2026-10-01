@@ -1,5 +1,6 @@
 package com.foliagui.gui;
 
+import com.foliagui.internal.InventoryViews;
 import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUIService;
 import com.foliagui.item.GuiAction;
@@ -261,7 +262,7 @@ public abstract class BaseGui implements InventoryHolder {
                     }
                     resolveTheme();
                     populateInventory();
-                    if (player.getOpenInventory().getTopInventory() == inventory) {
+                    if (InventoryViews.top(player.getOpenInventory()) == inventory) {
                         result.complete(GuiOperationResult.OPENED);
                     } else if (player.openInventory(inventory) == null) {
                         releaseViewer(player);
@@ -295,7 +296,7 @@ public abstract class BaseGui implements InventoryHolder {
         allowedCloses.add(player.getUniqueId());
         service().scheduler().runForEntity(player, () -> {
             try {
-                if (player.getOpenInventory().getTopInventory() != inventory) {
+                if (InventoryViews.top(player.getOpenInventory()) != inventory) {
                     allowedCloses.remove(player.getUniqueId());
                     result.complete(GuiOperationResult.REJECTED);
                     return;
@@ -462,7 +463,7 @@ public abstract class BaseGui implements InventoryHolder {
                 replacement.setContents(previous.getContents());
             }
             populateInventory();
-            if (viewer != null && viewer.getOpenInventory().getTopInventory() == previous) {
+            if (viewer != null && InventoryViews.top(viewer.getOpenInventory()) == previous) {
                 updating = true;
                 try {
                     if (viewer.openInventory(replacement) == null) {

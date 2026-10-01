@@ -27,15 +27,17 @@ public final class GuiListener implements Listener {
     private static final Logger LOGGER = Logger.getLogger(GuiListener.class.getName());
 
     private final FoliaGUIService service;
+    private final boolean anvilAvailable;
 
     public GuiListener(FoliaGUIService service) {
         this.service = service;
+        this.anvilAvailable = anvilAvailable();
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onClick(InventoryClickEvent event) {
         if (!(event.getInventory().getHolder() instanceof BaseGui gui)) {
-            if (!AnvilGui.handleClick(service, event)) {
+            if (!anvilAvailable || !AnvilGui.handleClick(service, event)) {
                 MerchantGui.handleClick(service, event);
             }
             return;
@@ -88,7 +90,9 @@ public final class GuiListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onDrag(InventoryDragEvent event) {
         if (!(event.getInventory().getHolder() instanceof BaseGui gui)) {
-            AnvilGui.handleDrag(service, event);
+            if (anvilAvailable) {
+                AnvilGui.handleDrag(service, event);
+            }
             return;
         }
         if (!gui.belongsTo(service)) {
@@ -122,7 +126,7 @@ public final class GuiListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onClose(InventoryCloseEvent event) {
         if (!(event.getInventory().getHolder() instanceof BaseGui gui)) {
-            if (!AnvilGui.handleClose(service, event)) {
+            if (!anvilAvailable || !AnvilGui.handleClose(service, event)) {
                 MerchantGui.handleClose(service, event);
             }
             return;
@@ -167,6 +171,15 @@ public final class GuiListener implements Listener {
             action.execute(event);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "A GuiAction threw an exception handling " + event.getClass().getSimpleName(), e);
+        }
+    }
+
+    private static boolean anvilAvailable() {
+        try {
+            Class.forName("org.bukkit.inventory.view.AnvilView", false, GuiListener.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError missing) {
+            return false;
         }
     }
 }

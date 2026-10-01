@@ -21,6 +21,7 @@ All notable changes to FoliaGUI are documented here. The format follows
 - Separate merchant result clicks from accepted purchases while preserving the deprecated click callback.
 - Validate serialized inventory bounds and malformed item data before allocation.
 - Schedule owner-thread window operations and location-thread sign sampling; terminate refused scheduling.
+- Resolve inventory view access across the Bukkit class-to-interface change on 1.20.6 and newer servers.
 
 ### Changed
 - Text parsing and serialization use shared folia-commons primitives, preserving null handling and item italic defaults.

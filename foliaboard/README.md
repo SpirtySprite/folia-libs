@@ -133,6 +133,8 @@ public final class YourPlugin extends JavaPlugin {
 ScoreboardAPI.createBoard(player).title("<aqua>Hi").line("<gray>Welcome!").build();
 ```
 
+For connected-player cleanup during disable, see [lifecycle hosts](#cleanup-hosts-and-metrics).
+
 All examples below use a `board` (a `FoliaBoard`); with the static handle just write `ScoreboardAPI`
 or `ScoreboardAPI.get()`.
 
@@ -591,9 +593,10 @@ boolean folia = AsyncUtil.isFolia();
 
 ## Threading model
 
-- **Public API is callable from any thread.** Mutations to a player's board are queued and applied on
+- **Managed presentation APIs are callable from any thread.** Mutations to a player's board are queued and applied on
   that player's region thread, in order, so nothing races.
 - **On Paper** (non-Folia) everything runs on the main thread — the same code, no branches.
+- Direct placeholder helpers run on their calling thread; use `componentAsync` for owner-thread rendering from arbitrary threads.
 - **You never schedule anything** for scoreboard work. For your own logic, use `AsyncUtil`.
 
 Internally: each `Sidebar` keeps *desired* state (written under a lock from any thread) and *sent*
@@ -653,12 +656,16 @@ global or per-world layout already drives that player's board).
 
 ## Lifecycle, cleanup & `/reload`
 
-- Create once in `onEnable`, call `board.close()` in `onDisable`. `close()` cancels every task,
-  unregisters the listener, and tears down all boards, nametags and objectives.
-- **Auto-cleanup** on quit, world-change and plugin-disable — no ghost players, no leaks.
-- **`/reload` is discouraged** (on Paper/Folia generally). Because FoliaBoard registers a listener and
-  scheduler tasks, prefer a full restart. A clean disable→enable cycle won't leak (guarded against
-  scheduling while disabled), but `/reload` remains unsupported as a reload mechanism.
+- Create once in `onEnable`. `close()` cancels tasks, unregisters the listener and releases
+  managed state. Its viewer removals are asynchronous and need an enabled scheduling plugin.
+- For owner-disable cleanup while players remain connected, use `create(owner, lifecycleHost)`
+  with an independent host that stays enabled until removals complete. The host observes owner
+  disable and dispatches cleanup on each viewer's owning thread.
+- A single-owner instance must close while its owner can still schedule. Calling `close()` from
+  `onDisable` still releases library state, but cannot guarantee client removals after scheduling
+  has been disabled. Quit cleanup and world-layout selection run through the registered listener.
+- Use a full restart for server reloads. The fixture tests exercise an owner disable/enable cycle
+  with a separate host; they do not make the server's `/reload` command a supported reload mechanism.
 
 ---
 

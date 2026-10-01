@@ -9,19 +9,19 @@ import org.geysermc.mcprotocollib.network.Session;
 import org.geysermc.mcprotocollib.network.event.session.DisconnectedEvent;
 import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.packet.Packet;
-import org.geysermc.mcprotocollib.network.session.ClientNetworkSession;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.PlayerListEntry;
 import org.geysermc.mcprotocollib.protocol.data.game.item.ItemStack;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerInfoUpdatePacket;
-import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundAddEntityPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundOpenScreenPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.scoreboard.ClientboundSetDisplayObjectivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.scoreboard.ClientboundSetObjectivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.scoreboard.ClientboundSetPlayerTeamPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.scoreboard.ClientboundSetScorePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundBossEventPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTabListPacket;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -44,7 +44,6 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.InteractAction;
 import org.geysermc.mcprotocollib.protocol.data.game.inventory.ClickItemAction;
 import org.geysermc.mcprotocollib.protocol.data.game.inventory.ContainerActionType;
-import org.geysermc.mcprotocollib.protocol.data.game.item.HashedStack;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.inventory.ServerboundContainerClickPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundInteractPacket;
 
@@ -68,6 +67,10 @@ public final class Bot {
     private final List<String> screens = new ArrayList<>();
     private final List<String> contents = new ArrayList<>();
     private final List<String> actions = new ArrayList<>();
+    private final List<String> presentationEvents = new ArrayList<>();
+    private final Map<String, String> activeObjectives = new TreeMap<>();
+    private final Map<String, String> activeTeams = new TreeMap<>();
+    private final Map<UUID, String> activeBossBars = new HashMap<>();
     private final Map<String, UUID> uuidByName = new HashMap<>();
     private final Map<UUID, Integer> entityByUuid = new HashMap<>();
     private final ScheduledExecutorService delayed = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -98,8 +101,7 @@ public final class Bot {
             thread.setDaemon(true);
             return thread;
         });
-        ClientNetworkSession session = new ClientNetworkSession(new InetSocketAddress(host, port),
-                new MinecraftProtocol(name), executor, null, null);
+        Session session = createSession(host, port, name, executor);
         session.addListener(new SessionAdapter() {
             @Override
             public void packetReceived(Session source, Packet packet) {
@@ -117,7 +119,7 @@ public final class Bot {
                 bot.finished.countDown();
             }
         });
-        session.connect(true);
+        session.getClass().getMethod("connect", boolean.class).invoke(session, true);
         boolean disconnected = bot.finished.await(maxSeconds, TimeUnit.SECONDS);
         if (!disconnected) {
             session.disconnect(Component.text("bot timeout"));
@@ -132,16 +134,38 @@ public final class Bot {
             joined = true;
         } else if (packet instanceof ClientboundSetObjectivePacket p) {
             add(objectives, p.getName() + " | " + p.getAction() + " | " + plain(p.getDisplayName()));
+            if (p.getAction().name().equals("REMOVE")) {
+                activeObjectives.remove(p.getName());
+            } else {
+                activeObjectives.put(p.getName(), plain(p.getDisplayName()));
+            }
         } else if (packet instanceof ClientboundSetDisplayObjectivePacket p) {
             add(displays, p.getPosition() + " | " + p.getName());
         } else if (packet instanceof ClientboundSetScorePacket p) {
             add(scores, p.getObjective() + " | " + p.getOwner() + " | " + p.getValue() + " | " + plain(p.getDisplay()));
         } else if (packet instanceof ClientboundSetPlayerTeamPacket p) {
             add(teams, p.getTeamName() + " | " + p.getAction() + " | " + plain(p.getPrefix()) + plain(p.getSuffix())
-                    + " | players=" + p.getPlayers().length);
-        } else if (packet instanceof ClientboundAddEntityPacket p) {
-            add(entities, p.getType() + " | " + p.getUuid() + " | id=" + p.getEntityId());
-            entityByUuid.put(p.getUuid(), p.getEntityId());
+                    + " | players=" + (p.getPlayers() == null ? 0 : p.getPlayers().length));
+            if (p.getAction().name().equals("REMOVE")) {
+                activeTeams.remove(p.getTeamName());
+            } else if (p.getAction().name().equals("CREATE") || p.getAction().name().equals("UPDATE")) {
+                activeTeams.put(p.getTeamName(), plain(p.getPrefix()));
+            }
+        } else if (packet instanceof ClientboundBossEventPacket p) {
+            String action = p.getAction().name();
+            add(presentationEvents, "boss | " + p.getUuid() + " | " + action + " | " + plain(p.getTitle()));
+            if (action.equals("REMOVE")) {
+                activeBossBars.remove(p.getUuid());
+            } else if (action.equals("ADD") || action.equals("UPDATE_TITLE")) {
+                activeBossBars.put(p.getUuid(), plain(p.getTitle()));
+            }
+        } else if (packet instanceof ClientboundTabListPacket p) {
+            add(presentationEvents, "tab | " + plain(p.getHeader()) + " | " + plain(p.getFooter()));
+        } else if (packet.getClass().getSimpleName().equals("ClientboundAddEntityPacket")) {
+            UUID uuid = (UUID) property(packet, "getUuid");
+            int entityId = ((Number) property(packet, "getEntityId")).intValue();
+            add(entities, property(packet, "getType") + " | " + uuid + " | id=" + entityId);
+            entityByUuid.put(uuid, entityId);
             interactWithNpcWhenKnown(session);
         } else if (packet instanceof ClientboundPlayerInfoUpdatePacket p) {
             for (PlayerListEntry entry : p.getEntries()) {
@@ -167,10 +191,33 @@ public final class Bot {
                 // Click the item in the middle of the three row menu, as a player would.
                 delayed.schedule(() -> {
                     session.send(new ServerboundContainerClickPacket(container, state, 13, ContainerActionType.CLICK_ITEM,
-                            ClickItemAction.LEFT_CLICK, null, new Int2ObjectOpenHashMap<HashedStack>()));
+                            ClickItemAction.LEFT_CLICK, null, new Int2ObjectOpenHashMap<>()));
                     recordAction("clicked slot 13 of container " + container);
                 }, 600, TimeUnit.MILLISECONDS);
             }
+        }
+    }
+
+    private static Session createSession(String host, int port, String name, ExecutorService executor) throws ReflectiveOperationException {
+        MinecraftProtocol protocol = new MinecraftProtocol(name);
+        try {
+            Class<?> type = Class.forName("org.geysermc.mcprotocollib.network.session.ClientNetworkSession");
+            Class<?> proxy = Class.forName("org.geysermc.mcprotocollib.network.ProxyInfo");
+            return (Session) type.getConstructor(java.net.SocketAddress.class, MinecraftProtocol.class,
+                    java.util.concurrent.Executor.class, java.net.SocketAddress.class, proxy)
+                    .newInstance(new InetSocketAddress(host, port), protocol, executor, null, null);
+        } catch (ClassNotFoundException absent) {
+            Class<?> type = Class.forName("org.geysermc.mcprotocollib.network.tcp.TcpClientSession");
+            Class<?> protocolType = Class.forName("org.geysermc.mcprotocollib.network.packet.PacketProtocol");
+            return (Session) type.getConstructor(String.class, int.class, protocolType).newInstance(host, port, protocol);
+        }
+    }
+
+    private static Object property(Packet packet, String getter) {
+        try {
+            return packet.getClass().getMethod(getter).invoke(packet);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Cannot read " + getter + " from " + packet.getClass().getName(), failure);
         }
     }
 
@@ -235,6 +282,10 @@ public final class Bot {
         result.put("screens", screens);
         result.put("containerContents", contents);
         result.put("actions", actions);
+        result.put("presentationEvents", presentationEvents);
+        result.put("activeObjectives", activeObjectives);
+        result.put("activeTeams", activeTeams);
+        result.put("activeBossBars", activeBossBars);
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         Files.writeString(file, gson.toJson(result), StandardCharsets.UTF_8);
     }

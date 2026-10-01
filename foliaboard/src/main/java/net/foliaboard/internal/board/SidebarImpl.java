@@ -35,7 +35,7 @@ public final class SidebarImpl implements Sidebar {
     private final List<LineData> desiredLines = new ArrayList<>();
     private boolean desiredVisible = true;
 
-    private boolean created = false;
+    private volatile boolean created = false;
     private Component sentTitle = Component.empty();
     private final List<LineData> sentLines = new ArrayList<>();
 
@@ -251,7 +251,8 @@ public final class SidebarImpl implements Sidebar {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.SIDEBAR);
         if (closed) {
             return;
         }

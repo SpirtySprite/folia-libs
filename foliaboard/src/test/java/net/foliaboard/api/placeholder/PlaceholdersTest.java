@@ -13,6 +13,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PlaceholdersTest {
 
     @Test
+    void expiredValuesArePrunedAndResolvedAgain() throws InterruptedException {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        Placeholders placeholders = new Placeholders().register("short", p -> "Value " + calls.incrementAndGet(),
+                java.time.Duration.ofMillis(5));
+        Player viewer = player();
+        assertEquals("Value 1", placeholders.apply(viewer, "%short%"));
+        Thread.sleep(20);
+        placeholders.pruneExpired();
+        assertEquals(0, placeholders.cachedValues());
+        assertEquals("Value 2", placeholders.apply(viewer, "%short%"));
+    }
+
+    @Test
     void boundedCachesAndFailingResolversRemainUsable() {
         Placeholders placeholders = new Placeholders().cacheLimit(2);
         placeholders.register("broken", p -> { throw new IllegalStateException("resolver"); });

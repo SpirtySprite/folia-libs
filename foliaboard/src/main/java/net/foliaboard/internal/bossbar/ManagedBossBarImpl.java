@@ -80,22 +80,32 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
         if (hidden) {
             return;
         }
-        String raw = spec.text().apply(player);
+        String raw = safely(() -> spec.text().apply(player), sentText);
         String text = raw == null ? "" : spec.placeholders() ? placeholders.resolveForMiniMessage(player, raw) : raw;
         if (!text.equals(sentText)) {
             bar.name(Text.cached(text));
             metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
             sentText = text;
         }
-        float progress = (float) clamp(spec.progress().applyAsDouble(player));
+        float progress = (float) clamp(safely(() -> spec.progress().applyAsDouble(player), (double) bar.progress()));
         if (bar.progress() != progress) {
             bar.progress(progress);
             metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         }
-        BossBar.Color color = spec.color().apply(player);
+        BossBar.Color color = safely(() -> spec.color().apply(player), bar.color());
         if (color != null && bar.color() != color) {
             bar.color(color);
             metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        }
+    }
+
+    private <T> T safely(java.util.function.Supplier<T> render, T previous) {
+        try {
+            return render.get();
+        } catch (RuntimeException failure) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "Boss-bar renderer failed; preserving its previous value", failure);
+            return previous;
         }
     }
 
@@ -136,7 +146,8 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
     }
 
     @Override
-    public void hide() {
+    public synchronized void hide() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         if (hidden) {
             return;
         }
@@ -150,11 +161,15 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
         if (running != null) {
             running.cancel();
         }
-        Schedulers.onEntity(cleanupPlugin, player, () -> player.hideBossBar(bar));
+        Schedulers.onEntity(cleanupPlugin, player, () -> {
+            player.hideBossBar(bar);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        });
         onHide.accept(player, id);
     }
 
-    public void hideSilently() {
+    public synchronized void hideSilently() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         if (hidden) {
             return;
         }
@@ -168,7 +183,10 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
         if (running != null) {
             running.cancel();
         }
-        Schedulers.onEntity(cleanupPlugin, player, () -> player.hideBossBar(bar));
+        Schedulers.onEntity(cleanupPlugin, player, () -> {
+            player.hideBossBar(bar);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        });
     }
 
     @Override

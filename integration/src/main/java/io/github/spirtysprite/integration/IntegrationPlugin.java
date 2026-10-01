@@ -332,15 +332,21 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                     menu.setItem(13, new com.foliagui.item.GuiItem(new org.bukkit.inventory.ItemStack(org.bukkit.Material.DIAMOND),
                             click -> menuClicks.incrementAndGet()));
                     menu.open(player);
-                    scheduler.runGlobalTimer(new Runnable() {
+                    installBoardFixtures(player);
+                    TaskGroup scenarioTasks = new TaskGroup();
+                    java.util.concurrent.atomic.AtomicBoolean finishing = new java.util.concurrent.atomic.AtomicBoolean();
+                    java.util.concurrent.atomic.AtomicBoolean expectedDisconnect = new java.util.concurrent.atomic.AtomicBoolean();
+                    done.whenComplete((result, failure) -> scenarioTasks.close());
+                    scenarioTasks.add(scheduler.runGlobalTimer(new Runnable() {
                         private int ticks;
 
                         @Override
                         public void run() {
                             ticks++;
                             boolean allClicked = menuClicks.get() > 0 && npcClicks.contains("LEFT") && npcClicks.contains("RIGHT");
-                            if (ticks == 400 || allClicked && ticks >= 100) {
+                            if ((ticks == 400 || allClicked && ticks >= 100) && finishing.compareAndSet(false, true)) {
                                 scheduler.runForEntity(player, () -> {
+                                    expectedDisconnect.set(true);
                                     player.kick(net.kyori.adventure.text.Component.text("integration done"));
                                     String summary = "sidebar, NPC and menu sent to " + player.getName()
                                             + "; menu clicks=" + menuClicks.get() + ", NPC clicks=" + npcClicks;
@@ -350,10 +356,14 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                                         done.completeExceptionally(new IllegalStateException(
                                                 "the player's clicks did not all arrive: " + summary));
                                     }
-                                }, () -> done.completeExceptionally(new IllegalStateException("player left early")));
+                                }, () -> {
+                                    if (!expectedDisconnect.get()) {
+                                        done.completeExceptionally(new IllegalStateException("player left early"));
+                                    }
+                                });
                             }
                         }
-                    }, 1, 1);
+                    }, 1, 1));
                 } catch (Throwable thrown) {
                     done.completeExceptionally(thrown);
                 }
@@ -366,12 +376,27 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
     }
 
     private CompletableFuture<String> closeEverything() {
+        board.close();
         npc.close();
         gui.close();
         if (!gui.isClosed()) {
             throw new IllegalStateException("the GUI service did not close");
         }
         return done("closed");
+    }
+
+    private void installBoardFixtures(Player player) throws ReflectiveOperationException {
+        org.bukkit.plugin.Plugin first = Bukkit.getPluginManager().getPlugin("BoardFixtureA");
+        org.bukkit.plugin.Plugin second = Bukkit.getPluginManager().getPlugin("BoardFixtureB");
+        if (first == null || second == null) {
+            return;
+        }
+        first.getClass().getMethod("install", Player.class).invoke(first, player);
+        second.getClass().getMethod("install", Player.class).invoke(second, player);
+        first.getClass().getMethod("hideObjective").invoke(first);
+        scheduler.scheduleGlobalLater(() -> Bukkit.getPluginManager().disablePlugin(first), 20);
+        scheduler.scheduleGlobalLater(() -> Bukkit.getPluginManager().enablePlugin(first), 60);
+        scheduler.scheduleGlobalLater(() -> Bukkit.getPluginManager().disablePlugin(first), 80);
     }
 
     private static boolean classExists(String name) {

@@ -8,6 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 class TextTest {
     @Test
+    void repeatedUseKeepsHotEntriesWhileEvictingColdEntries() {
+        Component hot = Text.cached("Hot bounded cache entry");
+        for (int i = 0; i < 2200; i++) {
+            assertSame(hot, Text.cached("Hot bounded cache entry"));
+            Text.cached("Cold bounded cache entry " + i);
+        }
+        assertSame(hot, Text.cached("Hot bounded cache entry"));
+    }
+    @Test
     void preservesEmptyFallbackMixedFormattingAndCaching() {
         assertEquals(Component.empty(), Text.parse(null));
         assertEquals("Gold blue", Text.plain(Text.parse("&6Gold <blue>blue")));

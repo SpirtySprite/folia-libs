@@ -142,6 +142,7 @@ public final class NametagImpl implements Nametag {
 
     @Override
     public void remove() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.TEAM);
         if (removed) {
             return;
         }

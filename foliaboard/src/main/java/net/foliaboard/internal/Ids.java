@@ -5,14 +5,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Locale;
 
-/**
- * Builds the objective and team names FoliaBoard sends to clients.
- *
- * <p>The client keeps one namespace of objectives and teams per player. Two plugins that each
- * shade FoliaBoard would otherwise both create {@code fb0} and overwrite each other, so every
- * name embeds a short hash of the owning plugin's name. Names stay within the classic 16
- * character limit.
- */
 public final class Ids {
     public static final int MAX_LENGTH = 16;
 
@@ -26,27 +18,39 @@ public final class Ids {
     }
 
     public static String instanceNamespace() {
-        return java.util.UUID.randomUUID().toString().substring(0, 6);
+        return java.util.UUID.randomUUID().toString();
     }
 
     public static @NotNull String sidebarObjective(@NotNull String namespace, int counter) {
-        return checked("fb" + namespace + Integer.toUnsignedString(counter, 36));
+        return checked("fb" + token(namespace, "sidebar", counter, 12));
     }
 
     public static @NotNull String belowNameObjective(@NotNull String namespace) {
-        return checked("fb" + namespace + "_bn");
+        return checked("fb" + token(namespace, "below", 0, 11) + "_bn");
     }
 
     public static @NotNull String tabListObjective(@NotNull String namespace) {
-        return checked("fb" + namespace + "_tab");
+        return checked("fb" + token(namespace, "tab", 0, 10) + "_tab");
     }
 
     public static @NotNull String team(@NotNull String namespace, @Nullable Integer sortWeight, int counter) {
-        String unique = namespace + Integer.toUnsignedString(counter, 36);
+        String unique = token(namespace, "team", counter, 12);
         String name = sortWeight != null
                 ? String.format(Locale.ROOT, "%04d", Math.max(0, Math.min(9999, sortWeight))) + unique
                 : "fbn" + unique;
         return checked(name);
+    }
+
+    private static String token(String namespace, String surface, int counter, int length) {
+        try {
+            byte[] bytes = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest((namespace + ":" + surface + ":" + counter).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String encoded = Long.toUnsignedString(java.nio.ByteBuffer.wrap(bytes).getLong(), 36);
+            String padded = "0".repeat(13 - encoded.length()) + encoded;
+            return padded.substring(padded.length() - length);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static String checked(String name) {

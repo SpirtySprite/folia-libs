@@ -33,7 +33,6 @@ public final class MeteredPacketAdapter implements PacketAdapter {
 
     @Override
     public boolean tabDisplayName(Player viewer, Player target, Component name) {
-        metrics.requested(Surface.TAB);
         boolean changed = delegate.tabDisplayName(viewer, target, name);
         if (changed) {
             metrics.changed(Surface.TAB);

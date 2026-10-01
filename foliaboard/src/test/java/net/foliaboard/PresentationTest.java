@@ -62,6 +62,120 @@ class PresentationTest {
     private PacketAdapter adapter;
 
     @Test
+    void closingAnOwnedTabResetsItsManagedOrder() {
+        try (var order = mockStatic(net.foliaboard.internal.tab.TabOrder.class)) {
+            order.when(() -> net.foliaboard.internal.tab.TabOrder.current(player)).thenReturn(java.util.OptionalInt.of(5));
+            var tab = board.tab(player).order(5).build();
+            scheduler.advanceTicks(2);
+            order.verify(() -> net.foliaboard.internal.tab.TabOrder.set(player, 5));
+            tab.close();
+            scheduler.advanceTicks(2);
+            order.verify(() -> net.foliaboard.internal.tab.TabOrder.set(player, 0));
+        }
+    }
+
+    @Test
+    void temporaryScopesRestoreDirectFramesAndStopTheirDynamicRefresh() {
+        Sidebar sidebar = board.sidebar(player).title(Component.text("Direct base")).line(0, Component.text("Direct row"));
+        SidebarState baseline = sidebar.snapshot();
+        LayoutScope outer = board.boards().temporaryLayout(player, Layout.named("outer", b -> b.title("Outer")));
+        scheduler.advanceTicks(3);
+        LayoutScope inner = board.boards().temporaryLayout(player, Layout.named("inner", b -> b.title(p -> "Dynamic inner")));
+        scheduler.advanceTicks(3);
+        outer.close();
+        inner.close();
+        scheduler.advanceTicks(45);
+        assertEquals(baseline, sidebar.snapshot());
+    }
+
+    @Test
+    void frozenPlaceholderModeIsAppliedBeforeQueuedRendering() {
+        board.placeholders().register("value", p -> "Resolved");
+        BoardBuilder builder = board.createBoard(player).placeholders(true).title("%value%").placeholders(false);
+        Sidebar sidebar = builder.build();
+        builder.placeholders(true);
+        scheduler.advanceTicks(3);
+        assertEquals(Component.text("%value%"), sidebar.title());
+        builder.build();
+        scheduler.advanceTicks(3);
+        assertEquals(Component.text("Resolved"), sidebar.title());
+    }
+
+    @Test
+    void temporaryScopesRestoreAQueuedManualSelection() {
+        board.boards().applyLayout(player, Layout.named("pending", b -> b.title("Pending base")));
+        LayoutScope temporary = board.boards().temporaryLayout(player, Layout.named("notice", b -> b.title("Notice")));
+        scheduler.advanceTicks(3);
+        assertEquals(Component.text("Notice"), board.sidebar(player).title());
+        temporary.close();
+        scheduler.advanceTicks(4);
+        assertEquals(Component.text("Pending base"), board.sidebar(player).title());
+    }
+
+    @Test
+    void oversizedLegacyListsCanStillBeCapturedAndRestored() {
+        Sidebar sidebar = board.sidebar(player);
+        List<Component> rows = java.util.stream.IntStream.range(0, 70).<Component>mapToObj(i -> Component.text("Row " + i)).toList();
+        sidebar.lines(rows);
+        SidebarState state = sidebar.snapshot();
+        assertEquals(70, state.lines().size());
+        sidebar.replace(state);
+        scheduler.advanceTicks(2);
+        assertEquals(rows, sidebar.lines());
+    }
+
+    @Test
+    void instancesUnderTheSameOwnerRemoveOnlyTheirOwnIdentifiers() {
+        PacketAdapter otherAdapter = mock(PacketAdapter.class);
+        FoliaBoard other = FoliaBoard.withAdapter(board.plugin(), otherAdapter);
+        board.createBoard(player).title("First").build();
+        other.createBoard(player).title("Second").build();
+        board.nametag(player).apply();
+        other.nametag(player).apply();
+        scheduler.advanceTicks(4);
+        var firstId = org.mockito.ArgumentCaptor.forClass(String.class);
+        var secondId = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(adapter).createObjective(eq(player), firstId.capture(), any());
+        verify(otherAdapter).createObjective(eq(player), secondId.capture(), any());
+        org.junit.jupiter.api.Assertions.assertNotEquals(firstId.getValue(), secondId.getValue());
+        clearInvocations(adapter, otherAdapter);
+        board.close();
+        scheduler.advanceTicks(2);
+        verify(adapter).removeObjective(player, firstId.getValue());
+        verify(adapter, never()).removeObjective(player, secondId.getValue());
+        verify(otherAdapter, never()).removeObjective(any(), any());
+        assertFalse(other.sidebar(player).closed());
+        other.close();
+    }
+
+    @Test
+    void closingTabsPreservesFieldsReplacedByAnotherOwner() {
+        var tab = board.tab(player).header("Owned").name("Owned").build();
+        scheduler.advanceTicks(2);
+        when(player.playerListHeader()).thenReturn(Component.text("Other"));
+        when(player.playerListName()).thenReturn(Component.text("Other"));
+        clearInvocations(player);
+        tab.close();
+        scheduler.advanceTicks(2);
+        verify(player, never()).sendPlayerListHeaderAndFooter(any(), any());
+        verify(player, never()).playerListName(any());
+    }
+
+    @Test
+    void failingTabAndBossCallbacksDoNotStopOtherProperties() {
+        AtomicInteger calls = new AtomicInteger();
+        var tab = board.tab(player).header(p -> { throw new IllegalStateException("header"); })
+                .name(p -> "Name " + calls.incrementAndGet()).build();
+        ManagedBossBar boss = board.bossBar(player, "fallback").text(p -> { throw new IllegalStateException("text"); })
+                .progress(p -> 0.4).show();
+        scheduler.advanceTicks(22);
+        assertTrue(tab.sentUpdates() >= 2);
+        assertEquals(0.4F, boss.bar().progress());
+        tab.close();
+        boss.hide();
+    }
+
+    @Test
     void unchangedRefreshesIncreaseRequestsWithoutApplyingMoreOperations() {
         Sidebar sidebar = board.createBoard(player).title("Metrics").line("Stable").build();
         scheduler.advanceTicks(3);

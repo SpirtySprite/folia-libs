@@ -74,7 +74,6 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public @NotNull ScoreObjective score(@NotNull Player target, int value) {
-        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         return score(target.getName(), value);
     }
 
@@ -162,7 +161,7 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
         long generation = visibilityGeneration.incrementAndGet();
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             Schedulers.onEntity(cleanupPlugin, viewer, () -> {
-                if (visibilityGeneration.get() != generation) {
+                if (visibilityGeneration.get() != generation || !hidden) {
                     return;
                 }
                 adapter.removeObjective(viewer, objectiveId);

@@ -8,16 +8,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Immutable desired sidebar frame. Safe to build and share from any thread; at most 64 rows are accepted. */
+/** Immutable desired sidebar frame, safe to build and share from any thread. */
 @ApiStatus.Experimental
 public record SidebarState(Component title, List<Line> lines, boolean visible) {
     /** Copies the rows and requires a title and non-null rows. The client displays the first 15 rows. */
     public SidebarState {
         Objects.requireNonNull(title, "title");
         lines = List.copyOf(lines);
-        if (lines.size() > 64) {
-            throw new IllegalArgumentException("A sidebar frame accepts at most 64 rows");
-        }
     }
 
     /** Immutable row with optional score formatting. */

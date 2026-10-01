@@ -40,7 +40,6 @@ public final class BoardBuilder {
 
     private Function<Player, Component> titleRenderer = p -> Component.empty();
     private boolean titleDynamic = false;
-    private boolean animated = false;
     private final TreeMap<Integer, LineSpec> lines = new TreeMap<>();
     private final java.util.List<net.foliaboard.api.hook.LineProcessor> processors = new java.util.ArrayList<>();
     private int nextAutoIndex = 0;
@@ -91,7 +90,6 @@ public final class BoardBuilder {
     public synchronized @NotNull BoardBuilder title(@NotNull Animation<Component> animation) {
         this.titleRenderer = new AnimatedRenderer(animation);
         this.titleDynamic = true;
-        this.animated = true;
         return this;
     }
 
@@ -125,7 +123,6 @@ public final class BoardBuilder {
     public synchronized @NotNull BoardBuilder line(int index, @NotNull Animation<Component> animation) {
         checkIndex(index);
         lines.put(index, new LineSpec(new AnimatedRenderer(animation), null, true));
-        animated = true;
         return this;
     }
 
@@ -140,8 +137,9 @@ public final class BoardBuilder {
     }
 
     public synchronized @NotNull BoardBuilder lineIf(@NotNull Predicate<Player> condition, @NotNull String anyFormat) {
+        int index = nextIndex();
         Rendered r = render(anyFormat);
-        lines.put(nextIndex(), new LineSpec(r.renderer, null, true, condition));
+        lines.put(index, new LineSpec(r.renderer, null, true, Objects.requireNonNull(condition, "condition")));
         return this;
     }
 
@@ -246,7 +244,6 @@ public final class BoardBuilder {
         copy.titleRefreshTicks = titleRefreshTicks;
         copy.titleRenderer = copy.copyRenderer(titleRenderer);
         copy.titleDynamic = titleDynamic;
-        copy.animated = animated;
         copy.lineRefreshTicks.putAll(lineRefreshTicks);
         copy.processors.addAll(processors);
         copy.nextAutoIndex = nextAutoIndex;
@@ -412,7 +409,7 @@ public final class BoardBuilder {
 
         @Override
         public Component apply(Player player) {
-            String resolved = board.runtime().placeholders().resolveForMiniMessage(player, raw);
+            String resolved = parsePlaceholders ? board.runtime().placeholders().resolveForMiniMessage(player, raw) : raw;
             if (!resolved.equals(lastResolved)) {
                 lastResolved = resolved;
                 lastComponent = Text.mini(resolved);

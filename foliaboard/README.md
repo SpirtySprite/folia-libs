@@ -769,7 +769,7 @@ callbacks run asynchronously; completions are checked against the current select
 Function-backed tab and boss-bar properties refresh every 20 ticks by default. `refreshEvery`
 overrides that cadence. Boss-bar `hideAfter` expires independently, even when the refresh interval
 is longer than its lifetime. Managed tabs with reset enabled restore managed header/footer, name
-and order to their defaults on close.
+and order to their defaults on close, provided another owner has not replaced those fields.
 
 ## Animation playback controls
 

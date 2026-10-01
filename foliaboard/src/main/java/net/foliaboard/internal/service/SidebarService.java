@@ -37,7 +37,6 @@ public final class SidebarService implements Boards {
     private final Map<String, Layout> layouts = new ConcurrentHashMap<>();
     private final Map<String, String> worldLayouts = new ConcurrentHashMap<>();
     private final Set<UUID> builderOwned = ConcurrentHashMap.newKeySet();
-    private final Set<UUID> worldLayoutOwned = ConcurrentHashMap.newKeySet();
     private final AtomicInteger objectiveCounter = new AtomicInteger();
 
     private final Set<UUID> manualPlayers = ConcurrentHashMap.newKeySet();
@@ -46,6 +45,7 @@ public final class SidebarService implements Boards {
     private final Map<UUID, Long> generations = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong sequence = new java.util.concurrent.atomic.AtomicLong();
     private final Map<UUID, CopyOnWriteArrayList<Scope>> scopes = new ConcurrentHashMap<>();
+    private final Map<UUID, net.foliaboard.api.SidebarState> scopeBases = new ConcurrentHashMap<>();
     private final ThreadLocal<Boolean> automatic = ThreadLocal.withInitial(() -> false);
 
     private volatile SidebarProvider globalProvider;
@@ -92,7 +92,6 @@ public final class SidebarService implements Boards {
         UUID id = player.getUniqueId();
         cancelRefresh(id);
         builderOwned.remove(id);
-        worldLayoutOwned.remove(id);
         manualPlayers.remove(id);
         manualRecipes.remove(id);
         rememberedLayouts.remove(id);
@@ -114,7 +113,6 @@ public final class SidebarService implements Boards {
         if (!automatic.get()) {
             generations.put(id, sequence.incrementAndGet());
             manualPlayers.add(id);
-            worldLayoutOwned.remove(id);
             cancelScopes(id);
         }
     }
@@ -209,11 +207,11 @@ public final class SidebarService implements Boards {
             return;
         }
         Sidebar sidebar = sidebar(player);
-        if (!provider.visible(player)) {
-            sidebar.visible(false);
-            return;
-        }
         try {
+            if (!provider.visible(player)) {
+                sidebar.visible(false);
+                return;
+            }
             sidebar.replace(new net.foliaboard.api.SidebarState(provider.title(player),
                     provider.lines(player).stream().map(net.foliaboard.api.SidebarState.Line::new).toList(), true));
         } catch (RuntimeException failure) {
@@ -253,6 +251,7 @@ public final class SidebarService implements Boards {
         runtime.ensureOpen();
         java.util.Objects.requireNonNull(layout, "layout");
         markBuilderOwned(player);
+        manualRecipes.put(player.getUniqueId(), () -> renderLayout(player, layout));
         long generation = generations.get(player.getUniqueId());
         Sidebar sidebar = sidebar(player);
         Schedulers.onEntity(runtime.plugin(), player, () -> {
@@ -315,9 +314,14 @@ public final class SidebarService implements Boards {
         runtime.ensureOpen();
         Scope scope = new Scope(java.util.Objects.requireNonNull(player, "player"),
                 java.util.Objects.requireNonNull(layout, "layout"));
+        scopeBases.computeIfAbsent(player.getUniqueId(), id -> {
+            SidebarImpl sidebar = sidebars.get(id);
+            return sidebar == null ? new net.foliaboard.api.SidebarState(net.kyori.adventure.text.Component.empty(), List.of(), true)
+                    : sidebar.snapshot();
+        });
         generations.put(player.getUniqueId(), sequence.incrementAndGet());
         scopes.computeIfAbsent(player.getUniqueId(), id -> new CopyOnWriteArrayList<>()).add(scope);
-        Schedulers.onEntity(runtime.plugin(), player, () -> {
+        boolean accepted = Schedulers.onEntity(runtime.plugin(), player, () -> {
             if (!scope.isCancelled() && !runtime.closed() && player.isOnline()) {
                 List<Scope> active = scopes.get(player.getUniqueId());
                 if (active != null && !active.isEmpty() && active.getLast() == scope) {
@@ -325,6 +329,17 @@ public final class SidebarService implements Boards {
                 }
             }
         }, scope::cancelWithoutRestore);
+        if (!accepted) {
+            scope.cancelWithoutRestore();
+            List<Scope> active = scopes.get(player.getUniqueId());
+            if (active != null) {
+                active.remove(scope);
+                if (active.isEmpty()) {
+                    scopes.remove(player.getUniqueId(), active);
+                    scopeBases.remove(player.getUniqueId());
+                }
+            }
+        }
         if (timed) {
             scope.lifetime.add(Schedulers.entityLater(runtime.plugin(), player, scope::close, ticks));
         }
@@ -410,6 +425,7 @@ public final class SidebarService implements Boards {
     }
 
     private void cancelScopes(UUID id) {
+        scopeBases.remove(id);
         List<Scope> active = scopes.remove(id);
         if (active != null) {
             active.forEach(Scope::cancelWithoutRestore);
@@ -417,11 +433,27 @@ public final class SidebarService implements Boards {
     }
 
     private void restoreBase(Player player) {
-        Runnable manual = manualRecipes.get(player.getUniqueId());
+        UUID id = player.getUniqueId();
+        net.foliaboard.api.SidebarState baseline = scopeBases.remove(id);
+        cancelRefresh(id);
+        SidebarImpl sidebar = sidebars.get(id);
+        if (sidebar != null) {
+            sidebar.refreshAction(null);
+        }
+        Runnable manual = manualRecipes.get(id);
         if (manual != null) {
             automatically(manual);
         } else {
-            restoreAutomatic(player);
+            org.bukkit.World world = player.getWorld();
+            String contextualName = world == null ? null : worldLayouts.get(world.getName());
+            boolean contextual = contextualName != null && layout(contextualName) != null;
+            if (!contextual && globalLayout == null && globalProvider == null && !rememberedLayouts.containsKey(id)
+                    && baseline != null && sidebar != null) {
+                sidebar.replace(baseline);
+                builderOwned.remove(id);
+            } else {
+                restoreAutomatic(player);
+            }
         }
     }
 
@@ -457,7 +489,7 @@ public final class SidebarService implements Boards {
                 if (active == null || active.isEmpty()) {
                     return;
                 }
-                boolean top = active.getLast() == this;
+                boolean top = active.getLast() == this || active.getLast().isCancelled();
                 active.remove(this);
                 active.removeIf(Scope::isCancelled);
                 if (top && !runtime.closed() && player.isOnline()) {
@@ -512,20 +544,20 @@ public final class SidebarService implements Boards {
         String name = world == null ? null : worldLayouts.get(world.getName());
         Layout worldLayout = name == null ? null : layout(name);
         if (worldLayout != null) {
-            worldLayoutOwned.add(id);
             automatically(() -> renderLayout(player, worldLayout));
         } else if (globalLayout != null) {
-            worldLayoutOwned.remove(id);
             automatically(() -> renderLayout(player, globalLayout));
         } else if (globalProvider != null) {
-            worldLayoutOwned.remove(id);
+            cancelRefresh(id);
+            SidebarImpl sidebar = sidebars.get(id);
+            if (sidebar != null) {
+                sidebar.refreshAction(null);
+            }
             builderOwned.remove(id);
             refreshFromProvider(player, globalProvider);
         } else if (rememberedLayouts.containsKey(id)) {
-            worldLayoutOwned.remove(id);
             automatically(() -> renderLayout(player, rememberedLayouts.get(id)));
         } else {
-            worldLayoutOwned.remove(id);
             SidebarImpl sidebar = sidebars.get(id);
             if (sidebar != null) {
                 sidebar.clearLines().title(net.kyori.adventure.text.Component.empty());
@@ -552,7 +584,8 @@ public final class SidebarService implements Boards {
             }
             restoreAutomatic(player);
             org.bukkit.World world = player.getWorld();
-            boolean worldConfigured = world != null && worldLayouts.containsKey(world.getName());
+            String contextualName = world == null ? null : worldLayouts.get(world.getName());
+            boolean worldConfigured = contextualName != null && layout(contextualName) != null;
             LayoutStore store = layoutStore;
             if (store != null && globalLayout == null && globalProvider == null && !worldConfigured
                     && !manualPlayers.contains(id) && !hasScope(id)) {
@@ -567,7 +600,7 @@ public final class SidebarService implements Boards {
                                     if (current(player, generation) && remembered != null && !manualPlayers.contains(id)
                                             && !hasScope(id) && globalLayout == null && globalProvider == null) {
                                         rememberedLayouts.put(id, remembered);
-                                        automatically(() -> renderLayout(player, remembered));
+                                        restoreAutomatic(player);
                                     }
                                 });
                             }
@@ -592,6 +625,7 @@ public final class SidebarService implements Boards {
     public void closeAll() {
         clearGlobal();
         scopes.keySet().forEach(this::cancelScopes);
+        scopeBases.clear();
         manualRecipes.clear();
         rememberedLayouts.clear();
         manualPlayers.clear();

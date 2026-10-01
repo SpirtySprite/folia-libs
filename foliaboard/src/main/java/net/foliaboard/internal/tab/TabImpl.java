@@ -87,8 +87,8 @@ public final class TabImpl implements TabList {
         if (closed) {
             return;
         }
-        String header = render(spec.header());
-        String footer = render(spec.footer());
+        String header = render(spec.header(), sentHeader);
+        String footer = render(spec.footer(), sentFooter);
         if ((header != null || footer != null)
                 && (!Objects.equals(header, sentHeader) || !Objects.equals(footer, sentFooter))) {
             player.sendPlayerListHeaderAndFooter(component(header), component(footer));
@@ -97,7 +97,7 @@ public final class TabImpl implements TabList {
             updates++;
             metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
         }
-        String name = render(spec.name());
+        String name = render(spec.name(), sentName);
         if (name != null && !name.equals(sentName)) {
             player.playerListName(component(name));
             sentName = name;
@@ -105,7 +105,13 @@ public final class TabImpl implements TabList {
             metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
         }
         if (spec.order() != null) {
-            int order = spec.order().applyAsInt(player);
+            int order;
+            try {
+                order = spec.order().applyAsInt(player);
+            } catch (RuntimeException failure) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "Tab order renderer failed", failure);
+                return;
+            }
             if (sentOrder == null || sentOrder != order) {
                 TabOrder.set(player, order);
                 sentOrder = order;
@@ -115,15 +121,20 @@ public final class TabImpl implements TabList {
         }
     }
 
-    private String render(Function<Player, String> source) {
+    private String render(Function<Player, String> source, String fallback) {
         if (source == null) {
             return null;
         }
-        String raw = source.apply(player);
-        if (raw == null) {
-            return null;
+        try {
+            String raw = source.apply(player);
+            if (raw == null) {
+                return null;
+            }
+            return spec.placeholders() ? placeholders.resolveForMiniMessage(player, raw) : raw;
+        } catch (RuntimeException failure) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING, "Tab renderer failed; preserving its previous value", failure);
+            return fallback;
         }
-        return spec.placeholders() ? placeholders.resolveForMiniMessage(player, raw) : raw;
     }
 
     private static Component component(String text) {
@@ -131,7 +142,8 @@ public final class TabImpl implements TabList {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.TAB);
         if (closed) {
             return;
         }
@@ -144,13 +156,24 @@ public final class TabImpl implements TabList {
         if (spec.resetOnClose() && player.isOnline()) {
             Schedulers.onEntity(cleanupPlugin, player, () -> {
                 if (sentHeader != null || sentFooter != null) {
-                    player.sendPlayerListHeaderAndFooter(Component.empty(), Component.empty());
+                    Component header = player.playerListHeader();
+                    Component footer = player.playerListFooter();
+                    if ((header == null || header.equals(component(sentHeader)))
+                            && (footer == null || footer.equals(component(sentFooter)))) {
+                        player.sendPlayerListHeaderAndFooter(Component.empty(), Component.empty());
+                        metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
+                    }
                 }
                 if (sentName != null) {
-                    player.playerListName(null);
+                    Component name = player.playerListName();
+                    if (name == null || name.equals(component(sentName))) {
+                        player.playerListName(null);
+                        metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
+                    }
                 }
-                if (sentOrder != null) {
+                if (sentOrder != null && TabOrder.current(player).orElse(sentOrder) == sentOrder) {
                     TabOrder.set(player, 0);
+                    metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
                 }
             });
         }

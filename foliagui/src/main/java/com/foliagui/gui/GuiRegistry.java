@@ -85,19 +85,14 @@ public final class GuiRegistry {
     }
 
     public void closeAll() {
-        boolean enabled = service.plugin().isEnabled();
-        for (UUID uuid : open.keySet()) {
-            Player player = Bukkit.getPlayer(uuid);
-            if (player == null) {
-                continue;
-            }
-            if (enabled) {
-                service.scheduler().runForEntity(player, player::closeInventory, null);
-                continue;
-            }
-            try {
-                player.closeInventory();
-            } catch (RuntimeException ignored) {
+        for (Map.Entry<UUID, BaseGui> entry : open.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player != null) {
+                if (!service.plugin().isEnabled() && Bukkit.getServer().isOwnedByCurrentRegion(player)) {
+                    entry.getValue().closeOwnedViewer(player);
+                } else {
+                    entry.getValue().close(player);
+                }
             }
         }
     }
@@ -116,6 +111,12 @@ public final class GuiRegistry {
 
     @ApiStatus.Internal
     public void clearAll() {
+        for (Map.Entry<UUID, BaseGui> entry : open.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player != null) {
+                entry.getValue().stopAutoUpdate(player);
+            }
+        }
         open.clear();
     }
 }

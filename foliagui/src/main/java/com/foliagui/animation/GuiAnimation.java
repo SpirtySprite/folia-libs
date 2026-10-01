@@ -1,5 +1,6 @@
 package com.foliagui.animation;
 
+import com.foliagui.internal.InventoryViews;
 import com.foliagui.gui.BaseGui;
 import com.foliagui.scheduler.TaskHandle;
 import org.bukkit.entity.Player;
@@ -32,6 +33,6 @@ public final class GuiAnimation {
     }
 
     private static boolean isViewing(@NotNull Player player, @NotNull BaseGui gui) {
-        return player.getOpenInventory().getTopInventory().getHolder() == gui;
+        return InventoryViews.top(player.getOpenInventory()).getHolder() == gui;
     }
 }

@@ -19,12 +19,32 @@ public final class PageView<T> {
     private @Nullable Predicate<T> filter;
     private @Nullable Comparator<T> order;
     private List<T> visible = List.of();
+    private PositionPolicy positionPolicy = PositionPolicy.RESET;
+    private T selected;
 
     PageView(@NotNull PaginatedGui gui, @NotNull Collection<T> entries, @NotNull Function<T, GuiItem> renderer) {
         this.gui = gui;
         this.renderer = renderer;
         this.source.addAll(entries);
         rebuild(false);
+    }
+
+    /** Controls position after entries are filtered, sorted or replaced. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public enum PositionPolicy { RESET, KEEP_PAGE, KEEP_SELECTED }
+
+    /** Selects how rebuilds restore position. Missing selected entries fall back to the current page. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public synchronized @NotNull PageView<T> positionPolicy(@NotNull PositionPolicy policy) {
+        positionPolicy = java.util.Objects.requireNonNull(policy, "policy");
+        return this;
+    }
+
+    /** Sets the entry whose page is retained by KEEP_SELECTED. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public synchronized @NotNull PageView<T> selected(@Nullable T entry) {
+        selected = entry;
+        return this;
     }
 
     public synchronized @NotNull PageView<T> filter(@Nullable Predicate<T> filter) {
@@ -64,6 +84,7 @@ public final class PageView<T> {
     }
 
     private void rebuild(boolean update) {
+        int previousPage = gui.getCurrentPage();
         List<T> next = new ArrayList<>(source.size());
         for (T entry : source) {
             if (filter == null || filter.test(entry)) {
@@ -77,7 +98,11 @@ public final class PageView<T> {
         visible = snapshot;
         gui.setPageItemSupplier(snapshot.size(), index -> renderer.apply(snapshot.get(index)));
         if (update) {
-            gui.update();
+            int index = selected == null ? -1 : snapshot.indexOf(selected);
+            int page = positionPolicy == PositionPolicy.RESET ? 1
+                    : positionPolicy == PositionPolicy.KEEP_SELECTED && index >= 0
+                    ? index / Math.max(1, gui.pageCapacity()) + 1 : previousPage;
+            gui.openPage(page);
         }
     }
 }

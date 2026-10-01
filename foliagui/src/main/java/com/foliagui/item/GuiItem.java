@@ -21,23 +21,23 @@ public final class GuiItem {
             java.util.Objects.requireNonNull(org.bukkit.NamespacedKey.fromString("foliagui:item"));
 
     private volatile UUID uuid;
-    private ItemStack itemStack;
-    private GuiAction<InventoryClickEvent> action;
-    private org.bukkit.Sound clickSound;
-    private float clickVolume = 1.0f;
-    private float clickPitch = 1.0f;
+    private volatile ItemStack itemStack;
+    private volatile GuiAction<InventoryClickEvent> action;
+    private volatile org.bukkit.Sound clickSound;
+    private volatile float clickVolume = 1.0f;
+    private volatile float clickPitch = 1.0f;
     private volatile long cooldownMillis;
     private static final UUID SHARED_CLICKER = new UUID(0L, 0L);
     private static final int COOLDOWN_PRUNE_THRESHOLD = 256;
     private final java.util.Map<UUID, Long> lastClicks = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean editable;
-    private GuiAction<InventoryClickEvent> leftClickAction;
-    private GuiAction<InventoryClickEvent> rightClickAction;
-    private GuiAction<InventoryClickEvent> shiftClickAction;
-    private GuiAction<InventoryClickEvent> numberKeyAction;
-    private GuiAction<InventoryClickEvent> cooldownBlockedAction;
-    private String requiredPermission;
-    private Consumer<Player> permissionDeniedHandler = player -> {
+    private volatile GuiAction<InventoryClickEvent> leftClickAction;
+    private volatile GuiAction<InventoryClickEvent> rightClickAction;
+    private volatile GuiAction<InventoryClickEvent> shiftClickAction;
+    private volatile GuiAction<InventoryClickEvent> numberKeyAction;
+    private volatile GuiAction<InventoryClickEvent> cooldownBlockedAction;
+    private volatile String requiredPermission;
+    private volatile Consumer<Player> permissionDeniedHandler = player -> {
     };
 
     public GuiItem(@NotNull ItemStack itemStack, @Nullable GuiAction<InventoryClickEvent> action) {
@@ -93,6 +93,21 @@ public final class GuiItem {
         ItemStack replacement = itemStack.clone();
         UUID identity = uuid;
         this.itemStack = identity == null ? replacement : stamp(replacement, identity);
+    }
+
+    /** Edits an isolated stack and replaces the rendered value. Call GUI update to redraw it. */
+    @ApiStatus.Experimental
+    public synchronized @NotNull GuiItem edit(@NotNull Consumer<ItemStack> editor) {
+        ItemStack copy = itemStack.clone();
+        editor.accept(copy);
+        setItemStack(copy);
+        return this;
+    }
+
+    /** Returns an isolated stack for safe inspection. */
+    @ApiStatus.Experimental
+    public @NotNull ItemStack itemStackSnapshot() {
+        return itemStack.clone();
     }
 
     public @NotNull GuiItem withItemStack(@NotNull ItemStack itemStack) {

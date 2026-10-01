@@ -33,13 +33,19 @@ public final class PaperFoliaScheduler implements Scheduler {
 
     @Override
     public void runForEntity(@NotNull Entity entity, @NotNull Runnable task, @Nullable Runnable retired) {
-        delegate.runForEntity(entity, task, retired);
+        Runnable stopped = once(retired);
+        if (!delegate.runForEntity(entity, task, stopped) && stopped != null) {
+            stopped.run();
+        }
     }
 
     @Override
     public void runForEntityLater(@NotNull Entity entity, @NotNull Runnable task, @Nullable Runnable retired,
                                   long delayTicks) {
-        delegate.runForEntityLater(entity, task, retired, delayTicks);
+        Runnable stopped = once(retired);
+        if (!delegate.runForEntityLater(entity, task, stopped, delayTicks) && stopped != null) {
+            stopped.run();
+        }
     }
 
     @Override
@@ -48,6 +54,9 @@ public final class PaperFoliaScheduler implements Scheduler {
                                                  long periodTicks) {
         net.foliacommons.scheduler.TaskHandle handle =
                 delegate.runForEntityTimer(entity, task, retired, initialDelayTicks, periodTicks);
+        if (handle == net.foliacommons.scheduler.TaskHandle.NOOP && retired != null) {
+            retired.run();
+        }
         return handle == net.foliacommons.scheduler.TaskHandle.NOOP ? STOPPED : new Adapter(handle);
     }
 
@@ -69,6 +78,28 @@ public final class PaperFoliaScheduler implements Scheduler {
     @Override
     public boolean isFolia() {
         return delegate.isFolia();
+    }
+
+    @Override
+    public boolean tryRunAsync(Runnable task) {
+        return delegate.runAsync(task);
+    }
+
+    @Override
+    public boolean tryRunForLocation(Location location, Runnable task) {
+        return delegate.runForLocation(location, task);
+    }
+
+    private static Runnable once(Runnable callback) {
+        if (callback == null) {
+            return null;
+        }
+        var called = new java.util.concurrent.atomic.AtomicBoolean();
+        return () -> {
+            if (called.compareAndSet(false, true)) {
+                callback.run();
+            }
+        };
     }
 
     private record Adapter(net.foliacommons.scheduler.TaskHandle handle) implements TaskHandle {

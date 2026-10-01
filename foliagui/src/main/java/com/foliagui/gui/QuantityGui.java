@@ -29,12 +29,12 @@ public final class QuantityGui {
     public static final class Builder {
         private FoliaGUIService service;
 
-        private String title = "&8Choose an amount";
+        private String title;
         private ItemStack display = new ItemStack(Material.CHEST);
         private int min = 1;
         private int max = 64;
         private int initial = 1;
-        private IntFunction<List<String>> description = amount -> List.of("&7Amount: &f" + amount);
+        private IntFunction<List<String>> description;
         private Consumer<Integer> onConfirm = amount -> {
         };
         private Runnable onCancel = () -> {
@@ -82,13 +82,22 @@ public final class QuantityGui {
         }
 
         public @NotNull Gui build() {
-            Gui gui = Gui.of(3, title);
+            return buildWithTheme((service != null ? service : com.foliagui.FoliaGUI.service()).theme());
+        }
+
+        /** Builds with the player's resolved theme. Call from the player's owning thread when the resolver reads player state. */
+        @org.jetbrains.annotations.ApiStatus.Experimental
+        public @NotNull Gui build(@NotNull Player player) {
+            return buildWithTheme((service != null ? service : com.foliagui.FoliaGUI.service()).theme(player));
+        }
+
+        private Gui buildWithTheme(GuiTheme theme) {
+            Gui gui = Gui.of(3, title == null ? theme.message(GuiMessage.QUANTITY_TITLE) : title);
             if (service != null) {
                 gui.service(service);
             }
             int[] amount = {clamp(initial)};
             AtomicBoolean decided = new AtomicBoolean();
-            GuiTheme theme = gui.service().theme();
             gui.filler().fill(theme.filler());
             Runnable[] render = new Runnable[1];
             render[0] = () -> {
@@ -96,13 +105,13 @@ public final class QuantityGui {
                     int step = STEPS[index];
                     gui.updateItem(com.foliagui.util.Slot.of(2, STEP_COLUMNS[index]), stepButton(step, amount, render[0], theme));
                 }
-                gui.updateItem(com.foliagui.util.Slot.of(2, 5), preview(amount[0]));
+                gui.updateItem(com.foliagui.util.Slot.of(2, 5), preview(amount[0], theme));
             };
             for (int index = 0; index < STEPS.length; index++) {
                 gui.setItem(2, STEP_COLUMNS[index], stepButton(STEPS[index], amount, render[0], theme));
             }
-            gui.setItem(2, 5, preview(amount[0]));
-            gui.setItem(3, 4, ItemBuilder.of(Material.LIME_CONCRETE).name("&aConfirm").asGuiItem(event -> {
+            gui.setItem(2, 5, preview(amount[0], theme));
+            gui.setItem(3, 4, ItemBuilder.of(Material.LIME_CONCRETE).name(theme.message(GuiMessage.CONFIRM)).asGuiItem(event -> {
                 if (!decided.compareAndSet(false, true)) {
                     return;
                 }
@@ -110,7 +119,7 @@ public final class QuantityGui {
                 gui.close(event.getWhoClicked());
                 onConfirm.accept(amount[0]);
             }));
-            gui.setItem(3, 6, ItemBuilder.of(Material.RED_CONCRETE).name("&cCancel").asGuiItem(event -> {
+            gui.setItem(3, 6, ItemBuilder.of(Material.RED_CONCRETE).name(theme.message(GuiMessage.CANCEL)).asGuiItem(event -> {
                 if (!decided.compareAndSet(false, true)) {
                     return;
                 }
@@ -122,7 +131,8 @@ public final class QuantityGui {
         }
 
         public void open(@NotNull Player player) {
-            build().open(player);
+            (service != null ? service : com.foliagui.FoliaGUI.service()).scheduler().runForEntity(player,
+                    () -> build(player).open(player), null);
         }
 
         private GuiItem stepButton(int step, int[] amount, Runnable render, GuiTheme theme) {
@@ -144,10 +154,10 @@ public final class QuantityGui {
             });
         }
 
-        private GuiItem preview(int amount) {
+        private GuiItem preview(int amount, GuiTheme theme) {
             ItemStack stack = display.clone();
             stack.setAmount(Math.max(1, Math.min(stack.getMaxStackSize(), amount)));
-            return ItemBuilder.of(stack).loreComponents(Text.parseList(description.apply(amount))).asGuiItem();
+            return ItemBuilder.of(stack).loreComponents(Text.parseList(description == null ? List.of(theme.message(GuiMessage.AMOUNT, amount)) : description.apply(amount))).asGuiItem();
         }
 
         int clamp(int value) {

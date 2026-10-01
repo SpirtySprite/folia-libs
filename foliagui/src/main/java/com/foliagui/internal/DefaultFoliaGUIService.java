@@ -33,6 +33,7 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
     private final GuiListener listener;
     private final org.bukkit.event.Listener signListener;
     private volatile GuiTheme theme = new GuiTheme();
+    private volatile java.util.function.Function<org.bukkit.entity.Player, GuiTheme> themeResolver;
     private volatile boolean closed;
 
     public DefaultFoliaGUIService(@NotNull Plugin owner) {
@@ -76,6 +77,18 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
     }
 
     @Override
+    public @NotNull GuiTheme theme(org.bukkit.entity.Player player) {
+        var resolver = themeResolver;
+        return resolver == null || !Bukkit.getServer().isOwnedByCurrentRegion(player)
+                ? theme : Objects.requireNonNull(resolver.apply(player), "resolved theme");
+    }
+
+    @Override
+    public void themeResolver(java.util.function.Function<org.bukkit.entity.Player, GuiTheme> resolver) {
+        themeResolver = Objects.requireNonNull(resolver, "resolver");
+    }
+
+    @Override
     public @NotNull GuiRegistry guis() {
         return guis;
     }
@@ -107,7 +120,7 @@ public final class DefaultFoliaGUIService implements FoliaGUIService {
                 .info("State", closed ? "closed" : "running")
                 .section("Features")
                 .ok("Inventory GUIs")
-                .feature("Anvil text input", present("org.bukkit.inventory.view.AnvilView"),
+                .feature("Anvil text input", present("org.bukkit.inventory.view.AnvilView") && present("org.bukkit.inventory.MenuType"),
                         "AnvilView is missing; needs Paper 1.21 or newer")
                 .feature("Sign text input", present(SIGN_EVENT),
                         "UncheckedSignChangeEvent is missing; needs a recent Paper")

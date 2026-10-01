@@ -1,5 +1,6 @@
 package com.foliagui.gui;
 
+import com.foliagui.internal.InventoryViews;
 import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUIService;
 import com.foliagui.util.Text;
@@ -30,11 +31,14 @@ public final class MerchantGui {
     private final List<MerchantRecipe> recipes;
     private final BiConsumer<Player, MerchantRecipe> onTrade;
     private final Consumer<Player> onClose;
+    private final BiConsumer<Player, MerchantRecipe> onPurchase;
+    private volatile InventoryIdentity opened;
 
     private MerchantGui(Builder builder) {
         this.service = builder.service;
         this.title = builder.title;
-        this.recipes = builder.recipes;
+        this.recipes = List.copyOf(builder.recipes);
+        this.onPurchase = builder.onPurchase;
         this.onTrade = builder.onTrade;
         this.onClose = builder.onClose;
     }
@@ -60,15 +64,19 @@ public final class MerchantGui {
         owner.scheduler().runForEntity(player, () -> {
             Merchant merchant = Bukkit.createMerchant(title);
             merchant.setRecipes(recipes);
-            player.openMerchant(merchant, true);
-            owner.sessions().merchant.put(player, this);
+            org.bukkit.inventory.InventoryView view = player.openMerchant(merchant, true);
+            if (view != null) {
+                opened = new InventoryIdentity(InventoryViews.top(view));
+                owner.sessions().merchant.put(player, this);
+            }
         }, null);
     }
 
     @ApiStatus.Internal
     public static boolean handleClick(@NotNull FoliaGUIService service, @NotNull InventoryClickEvent event) {
         MerchantGui gui = service.sessions().merchant.get(event.getWhoClicked());
-        if (gui == null || !(event.getInventory() instanceof MerchantInventory merchantInventory)) {
+        if (gui == null || gui.opened == null || gui.opened.inventory() != event.getInventory()
+                || !(event.getInventory() instanceof MerchantInventory merchantInventory)) {
             return false;
         }
         if (gui.onTrade != null && event.getSlot() == RESULT_SLOT
@@ -90,14 +98,26 @@ public final class MerchantGui {
 
     @ApiStatus.Internal
     public static boolean handleClose(@NotNull FoliaGUIService service, @NotNull InventoryCloseEvent event) {
-        MerchantGui gui = service.sessions().merchant.remove(event.getPlayer());
-        if (gui == null) {
+        MerchantGui gui = service.sessions().merchant.get(event.getPlayer());
+        if (gui == null || gui.opened == null || gui.opened.inventory() != event.getInventory()
+                || !service.sessions().merchant.remove(event.getPlayer(), gui)) {
             return false;
         }
         if (gui.onClose != null) {
             gui.onClose.accept((Player) event.getPlayer());
         }
         return true;
+    }
+
+    private record InventoryIdentity(org.bukkit.inventory.Inventory inventory) { }
+
+    @ApiStatus.Internal
+    public static void handlePurchase(FoliaGUIService service, io.papermc.paper.event.player.PlayerPurchaseEvent event) {
+        MerchantGui gui = service.sessions().merchant.get(event.getPlayer());
+        if (!event.isCancelled() && gui != null && gui.onPurchase != null && gui.opened != null
+                && InventoryViews.top(event.getPlayer().getOpenInventory()) == gui.opened.inventory()) {
+            gui.onPurchase.accept(event.getPlayer(), event.getTrade());
+        }
     }
 
     public static final class Builder {
@@ -111,6 +131,7 @@ public final class MerchantGui {
         private Component title = Component.empty();
         private final List<MerchantRecipe> recipes = new ArrayList<>();
         private BiConsumer<Player, MerchantRecipe> onTrade;
+        private BiConsumer<Player, MerchantRecipe> onPurchase;
         private Consumer<Player> onClose;
 
         public @NotNull Builder title(@NotNull String title) {
@@ -135,8 +156,27 @@ public final class MerchantGui {
             return this;
         }
 
+        /**
+         * Receives a result-slot click, which does not prove a purchase succeeded.
+         * @deprecated Use {@link #onResultClick(BiConsumer)} for clicks or {@link #onPurchase(BiConsumer)} for accepted purchases.
+         */
+        @Deprecated
         public @NotNull Builder onTrade(@NotNull BiConsumer<Player, MerchantRecipe> onTrade) {
             this.onTrade = onTrade;
+            return this;
+        }
+
+        /** Receives result-slot clicks on the owning thread, including clicks that do not produce a trade. */
+        @ApiStatus.Experimental
+        public @NotNull Builder onResultClick(@NotNull BiConsumer<Player, MerchantRecipe> callback) {
+            onTrade = java.util.Objects.requireNonNull(callback, "callback");
+            return this;
+        }
+
+        /** Receives noncancelled Paper purchase events at MONITOR. This is server acceptance, not a persistence receipt. */
+        @ApiStatus.Experimental
+        public @NotNull Builder onPurchase(@NotNull BiConsumer<Player, MerchantRecipe> callback) {
+            onPurchase = java.util.Objects.requireNonNull(callback, "callback");
             return this;
         }
 

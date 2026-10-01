@@ -345,21 +345,25 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                             ticks++;
                             boolean allClicked = menuClicks.get() > 0 && npcClicks.contains("LEFT") && npcClicks.contains("RIGHT");
                             if ((ticks == 400 || allClicked && ticks >= 100) && finishing.compareAndSet(false, true)) {
-                                scheduler.runForEntity(player, () -> {
-                                    expectedDisconnect.set(true);
-                                    player.kick(net.kyori.adventure.text.Component.text("integration done"));
-                                    String summary = "sidebar, NPC and menu sent to " + player.getName()
-                                            + "; menu clicks=" + menuClicks.get() + ", NPC clicks=" + npcClicks;
-                                    if (allClicked) {
-                                        done.complete(summary);
-                                    } else {
-                                        done.completeExceptionally(new IllegalStateException(
-                                                "the player's clicks did not all arrive: " + summary));
-                                    }
-                                }, () -> {
-                                    if (!expectedDisconnect.get()) {
-                                        done.completeExceptionally(new IllegalStateException("player left early"));
-                                    }
+                                GuiScenario.run(gui, player, scheduler).whenComplete((guiResult, guiFailure) -> {
+                                    scheduler.runForEntity(player, () -> {
+                                        expectedDisconnect.set(true);
+                                        player.kick(net.kyori.adventure.text.Component.text("integration done"));
+                                        String summary = "sidebar, NPC and menu sent to " + player.getName()
+                                                + "; menu clicks=" + menuClicks.get() + ", NPC clicks=" + npcClicks;
+                                        if (guiFailure != null) {
+                                            done.completeExceptionally(guiFailure);
+                                        } else if (allClicked) {
+                                            done.complete(summary + "; " + guiResult);
+                                        } else {
+                                            done.completeExceptionally(new IllegalStateException(
+                                                    "the player's clicks did not all arrive: " + summary));
+                                        }
+                                    }, () -> {
+                                        if (!expectedDisconnect.get()) {
+                                            done.completeExceptionally(new IllegalStateException("player left early"));
+                                        }
+                                    });
                                 });
                             }
                         }

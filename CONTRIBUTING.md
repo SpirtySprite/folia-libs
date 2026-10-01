@@ -105,3 +105,19 @@ while the other remains active. Client assertions check sidebar and team removal
 viewer score overrides, tab ownership and retention of unrelated objective/team identifiers. Results
 include current client state and packet history, so receiving a create packet alone cannot pass a
 cleanup assertion. Use a client protocol matching the server version.
+
+## FoliaGUI player scenarios
+
+With `BOT_JAR` set, the integration plugin also runs player-owned GUI checks after the
+initial menu and NPC interaction. They cover asynchronous opens, storage title changes,
+defensive storage snapshots, superseded content loads, remote page capacity and navigation,
+automatic text-input fallback, cancellation and native window identity. Anvil and virtual
+sign scenarios run only when their required server capabilities are available. Merchant
+fixtures check cancelled and accepted purchase callbacks without claiming that a client
+completed a real trade.
+
+Run these scenarios on both Paper and Folia for 1.20.6, 1.21.4, 1.21.8 and 1.21.11.
+Client protocol releases for those versions are `1.20.6-2-SNAPSHOT`, `1.21.4-SNAPSHOT`,
+`1.21.7-1` and `1.21.11-1`, respectively. Inspect `it-result.json`, `bot-result.json`
+and `server.log` in each server directory. A passing GUI unit test alone does not verify
+Folia region ownership or native inventory compatibility.

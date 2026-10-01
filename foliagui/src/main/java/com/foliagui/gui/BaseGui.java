@@ -1,5 +1,6 @@
 package com.foliagui.gui;
 
+import com.foliagui.internal.InventoryViews;
 import com.foliagui.FoliaGUI;
 import com.foliagui.FoliaGUIService;
 import com.foliagui.item.GuiAction;
@@ -34,7 +35,10 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public abstract class BaseGui implements InventoryHolder {
 
-    private Component title;
+    private volatile Component title;
+    private final java.util.concurrent.atomic.AtomicReference<HumanEntity> activeViewer = new java.util.concurrent.atomic.AtomicReference<>();
+    volatile GuiItem loadingItem;
+    private final java.util.concurrent.atomic.AtomicLong contentRevision = new java.util.concurrent.atomic.AtomicLong();
     private final int size;
     private final GuiType guiType;
     private final int rows;
@@ -47,13 +51,13 @@ public abstract class BaseGui implements InventoryHolder {
     private final Set<InteractionModifier> interactionModifiers =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    private GuiAction<InventoryClickEvent> defaultClickAction;
-    private GuiAction<InventoryClickEvent> defaultTopClickAction;
-    private GuiAction<InventoryClickEvent> playerInventoryAction;
-    private GuiAction<InventoryClickEvent> outsideClickAction;
-    private GuiAction<InventoryDragEvent> dragAction;
-    private GuiAction<InventoryOpenEvent> openAction;
-    private GuiAction<InventoryCloseEvent> closeAction;
+    private volatile GuiAction<InventoryClickEvent> defaultClickAction;
+    private volatile GuiAction<InventoryClickEvent> defaultTopClickAction;
+    private volatile GuiAction<InventoryClickEvent> playerInventoryAction;
+    private volatile GuiAction<InventoryClickEvent> outsideClickAction;
+    private volatile GuiAction<InventoryDragEvent> dragAction;
+    private volatile GuiAction<InventoryOpenEvent> openAction;
+    private volatile GuiAction<InventoryCloseEvent> closeAction;
 
     private volatile boolean updating;
 
@@ -63,6 +67,7 @@ public abstract class BaseGui implements InventoryHolder {
 
     private volatile FoliaGUIService service;
 
+    private volatile GuiTheme resolvedTheme;
     private volatile boolean forceOpen;
     private final Set<UUID> allowedCloses = ConcurrentHashMap.newKeySet();
 
@@ -109,8 +114,12 @@ public abstract class BaseGui implements InventoryHolder {
     }
 
     /** Binds this GUI to an explicit service. Call before the GUI is first opened. */
-    public @NotNull BaseGui service(@NotNull FoliaGUIService service) {
-        this.service = Objects.requireNonNull(service, "service cannot be null");
+    public synchronized @NotNull BaseGui service(@NotNull FoliaGUIService service) {
+        Objects.requireNonNull(service, "service cannot be null");
+        if (activeViewer.get() != null && this.service != service) {
+            throw new IllegalStateException("Cannot change service while the GUI is open");
+        }
+        this.service = service;
         return this;
     }
 
@@ -124,12 +133,12 @@ public abstract class BaseGui implements InventoryHolder {
 
     protected final void applyItem(int slot, @Nullable GuiItem item) {
         ItemStack stack = item == null ? null : item.getItemStack();
-        if (renderedItems[slot] == item && renderedStacks[slot] == stack) {
+        if (renderedItems[slot] == item && Objects.equals(renderedStacks[slot], stack)) {
             return;
         }
         getInventory().setItem(slot, stack == null ? null : stack.clone());
         renderedItems[slot] = item;
-        renderedStacks[slot] = stack;
+        renderedStacks[slot] = stack == null ? null : stack.clone();
     }
 
     public @NotNull BaseGui setItem(int slot, @NotNull GuiItem guiItem) {
@@ -206,7 +215,7 @@ public abstract class BaseGui implements InventoryHolder {
         }
         GuiItem replacement = existing.withItemStack(itemStack);
         guiItems.put(slot, replacement);
-        applyToInventory(() -> applyItem(slot, replacement));
+        applyToInventory(() -> applyItem(slot, guiItems.get(slot)));
         return this;
     }
 
@@ -214,37 +223,162 @@ public abstract class BaseGui implements InventoryHolder {
         Objects.requireNonNull(guiItem, "guiItem cannot be null");
         validateSlot(slot);
         guiItems.put(slot, guiItem);
-        applyToInventory(() -> applyItem(slot, guiItem));
+        applyToInventory(() -> applyItem(slot, guiItems.get(slot)));
         return this;
     }
 
     public void open(@NotNull HumanEntity player) {
-        Objects.requireNonNull(player, "player cannot be null");
-        if (player.isSleeping()) {
-            return;
-        }
-        service().scheduler().runForEntity(player, () -> {
-            warnIfSharedWithAnotherViewer(player);
-            populateInventory();
-            player.openInventory(inventory);
-        }, null);
+        openAsync(player);
     }
 
-    private void warnIfSharedWithAnotherViewer(HumanEntity player) {
-        for (HumanEntity viewer : inventory.getViewers()) {
-            if (!viewer.getUniqueId().equals(player.getUniqueId())) {
-                LOGGER.warning(getClass().getSimpleName() + " is being opened for " + player.getName()
-                        + " while " + viewer.getName() + " already has this exact instance open. "
-                        + "A BaseGui supports one viewer at a time; create a separate instance per player.");
-                break;
+    /** Opens on the player's thread and reports cancellation, shared-instance rejection or retirement. */
+    @ApiStatus.Experimental
+    public @NotNull java.util.concurrent.CompletableFuture<GuiOperationResult> openAsync(@NotNull HumanEntity player) {
+        Objects.requireNonNull(player, "player");
+        var result = new java.util.concurrent.CompletableFuture<GuiOperationResult>();
+        final FoliaGUIService owner;
+        synchronized (this) {
+            owner = service();
+            if (owner.isClosed()) {
+                result.complete(GuiOperationResult.REJECTED);
+                return result;
+            }
+            if (service == null) {
+                service = owner;
+            }
+            HumanEntity current = activeViewer.get();
+            if (current != player && !activeViewer.compareAndSet(null, player)) {
+                result.complete(GuiOperationResult.REJECTED);
+                return result;
             }
         }
+        try {
+            owner.scheduler().runForEntity(player, () -> {
+                try {
+                    if (owner.isClosed() || player.isSleeping()) {
+                        releaseViewer(player);
+                        result.complete(GuiOperationResult.REJECTED);
+                        return;
+                    }
+                    resolveTheme();
+                    populateInventory();
+                    if (InventoryViews.top(player.getOpenInventory()) == inventory) {
+                        result.complete(GuiOperationResult.OPENED);
+                    } else if (player.openInventory(inventory) == null) {
+                        releaseViewer(player);
+                        result.complete(GuiOperationResult.REJECTED);
+                    } else {
+                        result.complete(GuiOperationResult.OPENED);
+                    }
+                } catch (RuntimeException failure) {
+                    releaseViewer(player);
+                    result.completeExceptionally(failure);
+                }
+            }, () -> {
+                releaseViewer(player);
+                result.complete(GuiOperationResult.RETIRED);
+            });
+        } catch (RuntimeException failure) {
+            releaseViewer(player);
+            result.completeExceptionally(failure);
+        }
+        return result;
     }
 
     public void close(@NotNull HumanEntity player) {
-        Objects.requireNonNull(player, "player cannot be null");
+        closeAsync(player);
+    }
+
+    /** Closes this GUI on the owning thread; another active window is never closed by this operation. */
+    @ApiStatus.Experimental
+    public @NotNull java.util.concurrent.CompletableFuture<GuiOperationResult> closeAsync(@NotNull HumanEntity player) {
+        var result = new java.util.concurrent.CompletableFuture<GuiOperationResult>();
         allowedCloses.add(player.getUniqueId());
-        service().scheduler().runForEntity(player, player::closeInventory, null);
+        service().scheduler().runForEntity(player, () -> {
+            try {
+                if (InventoryViews.top(player.getOpenInventory()) != inventory) {
+                    allowedCloses.remove(player.getUniqueId());
+                    result.complete(GuiOperationResult.REJECTED);
+                    return;
+                }
+                player.closeInventory();
+                releaseViewer(player);
+                result.complete(GuiOperationResult.CLOSED);
+            } catch (RuntimeException failure) {
+                result.completeExceptionally(failure);
+            }
+        }, () -> {
+            allowedCloses.remove(player.getUniqueId());
+            releaseViewer(player);
+            result.complete(GuiOperationResult.RETIRED);
+        });
+        return result;
+    }
+
+    void closeOwnedViewer(HumanEntity player) {
+        allowedCloses.add(player.getUniqueId());
+        player.closeInventory();
+        stopAutoUpdate(player);
+        allowedCloses.remove(player.getUniqueId());
+    }
+
+    private void releaseViewer(HumanEntity player) {
+        if (activeViewer.compareAndSet(player, null)) {
+            contentRevision.incrementAndGet();
+        }
+    }
+
+    long beginContentRequest() {
+        return contentRevision.incrementAndGet();
+    }
+
+    boolean acceptsContent(Player player, long revision) {
+        return !service().isClosed() && contentRevision.get() == revision && isOpenFor(player);
+    }
+
+    /** Resolves the theme for the active viewer, or the service default while this GUI is closed. */
+    @ApiStatus.Experimental
+    public @NotNull GuiTheme theme() {
+        GuiTheme current = resolvedTheme;
+        return activeViewer.get() == null || current == null ? service().theme() : current;
+    }
+
+    private void resolveTheme() {
+        if (activeViewer.get() instanceof Player player) {
+            resolvedTheme = service().theme(player);
+        }
+    }
+
+    protected final <T> java.util.concurrent.CompletableFuture<T> inventoryAsync(java.util.function.Supplier<T> action) {
+        var result = new java.util.concurrent.CompletableFuture<T>();
+        Runnable run = () -> {
+            try {
+                result.complete(action.get());
+            } catch (RuntimeException failure) {
+                result.completeExceptionally(failure);
+            }
+        };
+        HumanEntity viewer = activeViewer.get();
+        if (viewer == null) {
+            synchronized (this) {
+                if (activeViewer.get() == null) {
+                    run.run();
+                    return result;
+                }
+            }
+            return inventoryAsync(action);
+        }
+        service().scheduler().runForEntity(viewer, () -> {
+            synchronized (this) {
+                if (activeViewer.get() != viewer) {
+                    result.completeExceptionally(new IllegalStateException("Inventory viewer changed"));
+                    return;
+                }
+                run.run();
+            }
+        },
+                () -> result.completeExceptionally(new IllegalStateException("Viewer retired")));
+        return result;
     }
 
     public void update() {
@@ -266,6 +400,7 @@ public abstract class BaseGui implements InventoryHolder {
     }
 
     private void tick() {
+        resolveTheme();
         java.util.function.Consumer<BaseGui> action = tickAction;
         if (action != null) {
             try {
@@ -282,7 +417,10 @@ public abstract class BaseGui implements InventoryHolder {
         if (updateIntervalTicks <= 0) {
             return;
         }
-        stopAutoUpdate(player);
+        com.foliagui.scheduler.TaskHandle previous = updateTasks.remove(player.getUniqueId());
+        if (previous != null) {
+            previous.cancel();
+        }
         com.foliagui.scheduler.TaskHandle handle = service().scheduler().runForEntityTimer(
                 player, this::tick, () -> stopAutoUpdate(player),
                 updateIntervalTicks, updateIntervalTicks);
@@ -291,6 +429,7 @@ public abstract class BaseGui implements InventoryHolder {
 
     @ApiStatus.Internal
     public void stopAutoUpdate(@NotNull HumanEntity player) {
+        releaseViewer(player);
         com.foliagui.scheduler.TaskHandle handle = updateTasks.remove(player.getUniqueId());
         if (handle != null) {
             handle.cancel();
@@ -318,41 +457,57 @@ public abstract class BaseGui implements InventoryHolder {
 
     public void updateTitle(@NotNull Component title) {
         Objects.requireNonNull(title, "title cannot be null");
-        service().scheduler().runGlobal(() -> {
+        applyToInventory(() -> {
             this.title = title;
-            List<HumanEntity> viewers = new ArrayList<>(inventory.getViewers());
+            HumanEntity viewer = activeViewer.get();
+            Inventory previous = inventory;
             Inventory replacement = guiType == null
                     ? Bukkit.createInventory(this, size, title)
                     : Bukkit.createInventory(this, guiType.getInventoryType(), title);
             this.inventory = replacement;
             Arrays.fill(renderedItems, null);
             Arrays.fill(renderedStacks, null);
+            if (this instanceof StorageGui) {
+                replacement.setContents(previous.getContents());
+            }
             populateInventory();
-            for (HumanEntity viewer : viewers) {
-                service().scheduler().runForEntity(viewer, () -> {
-                    updating = true;
-                    try {
-                        viewer.openInventory(replacement);
-                    } finally {
-                        updating = false;
+            if (viewer != null && InventoryViews.top(viewer.getOpenInventory()) == previous) {
+                updating = true;
+                try {
+                    if (viewer.openInventory(replacement) == null) {
+                        releaseViewer(viewer);
+                        service().guis().unregister(viewer);
                     }
-                }, null);
+                } finally {
+                    updating = false;
+                }
             }
         });
     }
 
-    private void applyToInventory(@NotNull Runnable mutation) {
-        List<HumanEntity> viewers = inventory.getViewers();
-        if (viewers.isEmpty()) {
-            mutation.run();
+    protected final void applyToInventory(@NotNull Runnable mutation) {
+        HumanEntity viewer = activeViewer.get();
+        if (viewer == null) {
+            synchronized (this) {
+                if (activeViewer.get() == null) {
+                    mutation.run();
+                    return;
+                }
+            }
+            applyToInventory(mutation);
             return;
         }
-        HumanEntity viewer = viewers.get(0);
         if (Bukkit.getServer().isOwnedByCurrentRegion(viewer)) {
+            resolveTheme();
             mutation.run();
             return;
         }
-        service().scheduler().runForEntity(viewer, mutation, null);
+        service().scheduler().runForEntity(viewer, () -> {
+            if (activeViewer.get() == viewer) {
+                resolveTheme();
+                mutation.run();
+            }
+        }, null);
     }
 
     public @NotNull BaseGui addInteractionModifier(@NotNull InteractionModifier modifier) {
@@ -430,10 +585,8 @@ public abstract class BaseGui implements InventoryHolder {
 
     public @NotNull List<Player> getViewerPlayers() {
         List<Player> players = new ArrayList<>();
-        for (HumanEntity viewer : inventory.getViewers()) {
-            if (viewer instanceof Player player) {
-                players.add(player);
-            }
+        if (activeViewer.get() instanceof Player player) {
+            players.add(player);
         }
         return players;
     }
@@ -458,8 +611,41 @@ public abstract class BaseGui implements InventoryHolder {
         return guiType;
     }
 
+    /**
+     * Returns the legacy mutable slot map.
+     * @deprecated Use {@link #guiItemsSnapshot()} for reads and {@link #setItem(int, GuiItem)} for mutations.
+     */
+    @Deprecated
     public @NotNull Map<Integer, GuiItem> getGuiItems() {
         return guiItems;
+    }
+
+    /** Returns an immutable slot-map snapshot; GuiItem values retain their documented mutable identity. */
+    @ApiStatus.Experimental
+    public @NotNull Map<Integer, GuiItem> guiItemsSnapshot() {
+        return Map.copyOf(guiItems);
+    }
+
+    /** Creates and opens a separate GUI from the factory for this player on their owning thread. */
+    @ApiStatus.Experimental
+    public static @NotNull java.util.concurrent.CompletableFuture<GuiOperationResult> openFor(
+            @NotNull FoliaGUIService service, @NotNull Player player,
+            @NotNull java.util.function.Function<Player, ? extends BaseGui> factory) {
+        var result = new java.util.concurrent.CompletableFuture<GuiOperationResult>();
+        service.scheduler().runForEntity(player, () -> {
+            try {
+                factory.apply(player).service(service).openAsync(player).whenComplete((outcome, failure) -> {
+                    if (failure == null) {
+                        result.complete(outcome);
+                    } else {
+                        result.completeExceptionally(failure);
+                    }
+                });
+            } catch (RuntimeException failure) {
+                result.completeExceptionally(failure);
+            }
+        }, () -> result.complete(GuiOperationResult.RETIRED));
+        return result;
     }
 
     public @Nullable GuiAction<InventoryClickEvent> getSlotAction(int slot) {

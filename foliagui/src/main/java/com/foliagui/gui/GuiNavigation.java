@@ -5,11 +5,11 @@ import org.bukkit.entity.HumanEntity;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 /** Back-navigation history between GUIs, for one {@code FoliaGUIService}. */
 public final class GuiNavigation {
@@ -24,10 +24,13 @@ public final class GuiNavigation {
     }
 
     public void open(@NotNull HumanEntity player, @NotNull BaseGui next) {
+        if (!next.belongsTo(service)) {
+            throw new IllegalArgumentException("Navigation target belongs to another service");
+        }
         BaseGui current = service.guis().getOpenGui(player);
         if (current != null && current != next) {
             history.compute(player.getUniqueId(), (key, stack) -> {
-                Deque<BaseGui> entries = stack == null ? new ArrayDeque<>() : stack;
+                Deque<BaseGui> entries = stack == null ? new ConcurrentLinkedDeque<>() : stack;
                 entries.remove(next);
                 entries.remove(current);
                 entries.push(current);
@@ -51,7 +54,7 @@ public final class GuiNavigation {
 
     public void backOrClose(@NotNull HumanEntity player) {
         if (!back(player)) {
-            player.closeInventory();
+            service.scheduler().runForEntity(player, player::closeInventory, null);
         }
     }
 

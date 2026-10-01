@@ -13,6 +13,7 @@ import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.PlayerListEntry;
 import org.geysermc.mcprotocollib.protocol.data.game.item.ItemStack;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetEquipmentPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerInfoUpdatePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundOpenScreenPacket;
@@ -81,6 +82,16 @@ public final class Bot {
     private boolean clickedMenu;
     private boolean interactedWithNpc;
     private boolean joined;
+    private final UUID reviewUuid = UUID.fromString("00000000-0000-0000-0000-000000000018");
+    private final java.util.Set<Integer> reviewHolograms = new java.util.HashSet<>();
+    private Integer reviewEntity;
+    private double reviewX;
+    private double reviewZ;
+    private double reviewMovementX;
+    private boolean reviewNametagMoved;
+    private boolean npcEquipmentSeen;
+    private boolean npcEquipmentCleared;
+    private final java.util.Set<Integer> equippedEntities = new java.util.HashSet<>();
     private String disconnectReason = "";
     private final CountDownLatch finished = new CountDownLatch(1);
 
@@ -166,7 +177,31 @@ public final class Bot {
             int entityId = ((Number) property(packet, "getEntityId")).intValue();
             add(entities, property(packet, "getType") + " | " + uuid + " | id=" + entityId);
             entityByUuid.put(uuid, entityId);
+            double x = ((Number) property(packet, "getX")).doubleValue();
+            double z = ((Number) property(packet, "getZ")).doubleValue();
+            if (uuid.equals(reviewUuid)) {
+                reviewEntity = entityId;
+                reviewX = x;
+                reviewZ = z;
+            } else if (reviewEntity != null && property(packet, "getType").toString().equals("TEXT_DISPLAY")
+                    && Math.abs(x - reviewX) < 1e-6 && Math.abs(z - reviewZ) < 1e-6) {
+                reviewHolograms.add(entityId);
+            }
             interactWithNpcWhenKnown(session);
+        } else if (packet instanceof org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveEntityPosPacket p) {
+            if (reviewEntity != null && p.getEntityId() == reviewEntity) reviewMovementX += p.getMoveX();
+            if (reviewHolograms.contains(p.getEntityId()) && Math.abs(p.getMoveY() - 1.0) < 1e-6) {
+                reviewNametagMoved = true;
+            }
+        } else if (packet instanceof ClientboundSetEquipmentPacket p) {
+            boolean filled = java.util.Arrays.stream(p.getEquipment())
+                    .anyMatch(equipment -> equipment.getItem() != null && equipment.getItem().getAmount() > 0);
+            if (filled) {
+                equippedEntities.add(p.getEntityId());
+                npcEquipmentSeen = true;
+            } else if (equippedEntities.remove(p.getEntityId())) {
+                npcEquipmentCleared = true;
+            }
         } else if (packet instanceof ClientboundPlayerInfoUpdatePacket p) {
             for (PlayerListEntry entry : p.getEntries()) {
                 String profileName = entry.getProfile() == null ? "?" : entry.getProfile().getName();
@@ -270,6 +305,10 @@ public final class Bot {
     private synchronized void write(Path file, boolean disconnectedByServer) throws IOException {
         Map<String, Object> result = new TreeMap<>();
         result.put("joined", joined);
+        result.put("npcArrivalMovement", reviewMovementX);
+        result.put("npcNametagMoved", reviewNametagMoved);
+        result.put("npcEquipmentSeen", npcEquipmentSeen);
+        result.put("npcEquipmentCleared", npcEquipmentCleared);
         result.put("disconnectedByServer", disconnectedByServer);
         result.put("disconnectReason", disconnectReason);
         result.put("packetCounts", packetCounts);

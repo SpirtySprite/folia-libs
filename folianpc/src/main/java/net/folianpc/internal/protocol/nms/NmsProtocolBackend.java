@@ -2,6 +2,7 @@ package net.folianpc.internal.protocol.nms;
 
 import net.folianpc.api.Capabilities;
 import net.folianpc.internal.protocol.HologramLine;
+import net.folianpc.internal.protocol.BodySize;
 import net.folianpc.internal.protocol.NpcSnapshot;
 import net.folianpc.internal.protocol.ProtocolBackend;
 import org.bukkit.entity.EntityType;
@@ -39,6 +40,8 @@ public final class NmsProtocolBackend implements ProtocolBackend {
     private final Object playerType;
     private final Object vec3Zero;
     private final Method typeByName;
+    private final Method[] dimensionMethods;
+    private final Map<EntityType, Optional<BodySize>> bodySizes = new ConcurrentHashMap<>();
 
     private final Class<?> packetClass;
     private final Constructor<?> addEntityCtor;
@@ -88,6 +91,8 @@ public final class NmsProtocolBackend implements ProtocolBackend {
 
         this.packetClass = Reflect.nms("network.protocol", "Packet", "Packet");
         this.typeByName = Reflect.methodByNameOrSignature(entityType, "byString", Optional.class, String.class);
+        this.dimensionMethods = optional("entity dimensions", () -> new Method[]{
+                Reflect.method(entityType, "getWidth"), Reflect.method(entityType, "getHeight")});
         this.entityCounter = resolveEntityCounter(entity);
         this.playerType = resolvePlayerType(entityType, playerEntity);
         this.vec3Zero = Reflect.staticFieldByNameOrType(vec3, "ZERO", vec3);
@@ -182,6 +187,21 @@ public final class NmsProtocolBackend implements ProtocolBackend {
                 appearance != null && appearance.villagerDataSupported());
     }
 
+    public boolean dimensionsSupported() {
+        return dimensionMethods != null;
+    }
+
+    @Override
+    public Optional<BodySize> bodySize(EntityType entityType) {
+        if (!dimensionsSupported()) return Optional.empty();
+        return bodySizes.computeIfAbsent(entityType, key -> {
+            Object registered = type(key);
+            double width = ((Number) Reflect.invoke(dimensionMethods[0], registered)).doubleValue();
+            double height = ((Number) Reflect.invoke(dimensionMethods[1], registered)).doubleValue();
+            return Optional.of(new BodySize(width, height));
+        });
+    }
+
     @Override
     public int nextEntityId() {
         return entityCounter.incrementAndGet();
@@ -203,7 +223,8 @@ public final class NmsProtocolBackend implements ProtocolBackend {
         if (npc.scale() != 1.0) {
             scale(viewer, npc.entityId(), npc.scale());
         }
-        equip(viewer, npc.entityId(), npc.equipment());
+        Map<EquipmentSlot, ItemStack> items = npc.equipment();
+        if (!items.isEmpty()) equip(viewer, npc.entityId(), items);
         showHologram(viewer, npc.hologram());
     }
 
@@ -310,6 +331,15 @@ public final class NmsProtocolBackend implements ProtocolBackend {
     public void equip(Player viewer, int entityId, Map<EquipmentSlot, ItemStack> items) {
         if (equipment != null && !items.isEmpty()) {
             send(viewer, equipment.packet(entityId, items));
+        }
+    }
+
+    @Override
+    public void equipChanges(Player viewer, int entityId, Map<EquipmentSlot, ItemStack> items,
+                             java.util.Set<EquipmentSlot> changed) {
+        if (equipment != null) {
+            Object packet = equipment.packet(entityId, items, changed);
+            if (packet != null) send(viewer, packet);
         }
     }
 

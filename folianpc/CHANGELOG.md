@@ -6,6 +6,26 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Managed patrol and follow behavior with waits, distance limits and lifecycle completion.
+- Coherent appearance batches, per-viewer appearance and equipment overrides, and configurable entity-relative nametags.
+- Bounded skin caches and network concurrency, typed fetch outcomes and latest-request-only skin application.
+- High-level persistence loading with migration reports for dropped fields, schema assumptions and substituted values.
+- Snapshot-based navigation with bounded search options, clearance dimensions, ground following and observable movement outcomes.
+- Visibility hysteresis for existing viewers.
+
+### Fixed
+- Arrival callbacks retain committed viewer movement; queued updates reconcile against the last sent position.
+- Existing nametag displays reposition after layout, scale, pose and baby changes, including large offsets.
+- Appearance recipes and text-only nametag edits use partial updates; removing equipment sends explicit empty slots.
+- Pending navigation completes on cancellation, replacement, removal, shutdown and search failure.
+- Visibility predicates and viewer updates run on player ownership threads; hidden and stale clicks are rejected.
+- Duplicate UUIDs and creation after shutdown are rejected; equipment and position snapshots are independent and coherent.
+- Nonfinite coordinates, speed, scale, view distance and proximity inputs are rejected.
+
+### Deprecated
+- The boolean navigation overload remains supported; the movement task overload also reports arrival and cancellation.
+
 ### Changed
 - Text parsing and serialization use shared folia-commons primitives, preserving empty input and escaping behavior.
 

@@ -1,6 +1,9 @@
 package net.folianpc.internal;
 
 import net.folianpc.api.ClickType;
+import net.folianpc.api.MovementResult;
+import net.folianpc.api.MovementTask;
+import net.folianpc.api.NavigationOptions;
 import net.folianpc.api.Emote;
 import net.folianpc.api.Npc;
 import net.folianpc.api.NpcAction;
@@ -10,8 +13,11 @@ import net.folianpc.api.NpcData;
 import net.folianpc.api.MetadataType;
 import net.folianpc.api.MobVariant;
 import net.folianpc.api.NametagStyle;
+import net.folianpc.api.NametagLayout;
+import net.folianpc.api.ViewerAppearance;
 import net.folianpc.api.NpcPose;
 import net.folianpc.api.Skin;
+import net.folianpc.api.SkinApplyResult;
 import org.bukkit.entity.Player;
 import net.folianpc.internal.geometry.LookAt;
 import net.folianpc.internal.protocol.HologramLine;
@@ -38,9 +44,8 @@ import java.util.function.Consumer;
 
 public final class NpcImpl implements Npc {
 
-    private static final double HOLOGRAM_BASE = 2.05;
-    private static final double HOLOGRAM_SPACING = 0.28;
     private static final int MAX_PROFILE_NAME = 16;
+    private static final NavigationOptions DEFAULT_NAVIGATION = NavigationOptions.defaults();
 
     public record ActionEntry(NpcAction action, long delayTicks) {
     }
@@ -50,9 +55,22 @@ public final class NpcImpl implements Npc {
     private volatile EntityType type;
     private final NpcManager manager;
     private volatile UUID owner;
+    private volatile NametagLayout nametagLayout = NametagLayout.defaults();
+    private final Map<UUID, ViewerAppearance> viewerAppearances = new ConcurrentHashMap<>();
+    private int batchDepth;
+    private boolean dirtyRefresh;
+    private boolean dirtyMeta;
+    private boolean dirtyScale;
+    private boolean dirtyEquipment;
+    private final Set<EquipmentSlot> dirtySlots = java.util.EnumSet.noneOf(EquipmentSlot.class);
+    private boolean dirtyNametag;
+    private final Set<Integer> staleLines = new java.util.HashSet<>();
 
     private volatile Position position;
 
+    private long movementGeneration;
+    private MovementRequest movement;
+    private NpcBehavior behavior;
     private volatile double[] walkTarget;
     private volatile double walkSpeed;
     private final Queue<double[]> waypoints = new ConcurrentLinkedQueue<>();
@@ -67,6 +85,7 @@ public final class NpcImpl implements Npc {
 
     private volatile String name;
     private volatile Skin skin;
+    private CompletableFuture<SkinApplyResult> pendingSkin;
     private volatile boolean mirrorSkin;
     private volatile NpcClickListener clickListener;
     private volatile boolean lookAtPlayers;
@@ -94,6 +113,7 @@ public final class NpcImpl implements Npc {
     private int nametagRefreshCountdown;
 
     private volatile double viewDistance;
+    private volatile double visibilityHysteresis;
 
     private volatile double proximityRadius;
     private volatile BiConsumer<Npc, Player> nearCallback;
@@ -103,19 +123,22 @@ public final class NpcImpl implements Npc {
     NpcImpl(UUID uuid, int entityId, String name, EntityType type, Position position, NpcManager manager) {
         this.uuid = uuid;
         this.entityId = entityId;
-        this.name = name;
-        this.type = type;
+        this.name = name == null || name.isBlank() ? "NPC" : name;
+        this.type = type == null ? EntityType.PLAYER : type;
         this.position = position;
         this.manager = manager;
     }
 
     @Override
-    public Npc teleport(Location target) {
+    public synchronized Npc teleport(Location target) {
+        ensureLive();
         return teleportTo(toPosition(target));
     }
 
     @Override
-    public Npc walkTo(Location target, double blocksPerSecond) {
+    public synchronized Npc walkTo(Location target, double blocksPerSecond) {
+        ensureLive();
+        finite(blocksPerSecond, "movement speed");
         String world = target.getWorld() != null ? target.getWorld().getName() : "world";
         if (!world.equals(position.world())) {
             return teleportTo(toPosition(target));
@@ -124,43 +147,201 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public CompletableFuture<Boolean> navigateTo(Location target, double blocksPerSecond) {
+    public synchronized CompletableFuture<Boolean> navigateTo(Location target, double blocksPerSecond) {
+        endBehavior(MovementResult.Status.SUPERSEDED);
         return manager.navigate(this, target, blocksPerSecond);
     }
 
-    Npc teleportTo(Position target) {
-        this.walkTarget = null;
-        waypoints.clear();
+    synchronized Npc teleportTo(Position target) {
+        endBehavior(MovementResult.Status.SUPERSEDED);
         this.position = target;
+        endMovement(MovementResult.Status.SUPERSEDED);
         if (!removed) {
             manager.reposition(this);
         }
         return this;
     }
 
-    Npc walkToward(double x, double y, double z, double blocksPerSecond) {
+    synchronized Npc walkToward(double x, double y, double z, double blocksPerSecond) {
+        finite(blocksPerSecond, "movement speed");
+        new Position(position.world(), x, y, z, 0, 0);
+        endBehavior(MovementResult.Status.SUPERSEDED);
+        MovementRequest ending = movement;
+        movement = null;
+        movementGeneration++;
         waypoints.clear();
         this.walkSpeed = Math.max(0.05, blocksPerSecond);
         this.walkTarget = new double[]{x, y, z};
-        return this;
-    }
-
-    Npc followRoute(List<double[]> route, double blocksPerSecond) {
-        if (route.isEmpty()) {
-            return this;
-        }
-        waypoints.clear();
-        var legs = route.iterator();
-        this.walkSpeed = Math.max(0.05, blocksPerSecond);
-        this.walkTarget = legs.next();
-        legs.forEachRemaining(waypoints::add);
+        if (ending != null) ending.finish(MovementResult.of(MovementResult.Status.SUPERSEDED));
         return this;
     }
 
     @Override
-    public Npc stopWalking() {
-        this.walkTarget = null;
+    public synchronized MovementTask navigateTo(Location target, double speed, NavigationOptions options) {
+        endBehavior(MovementResult.Status.SUPERSEDED);
+        return manager.navigate(this, target, speed, options);
+    }
+
+    synchronized MovementRequest beginMovement() {
+        MovementRequest ending = movement;
+        movementGeneration++;
+        walkTarget = null;
         waypoints.clear();
+        MovementRequest request = new MovementRequest(movementGeneration, this);
+        movement = removed || manager.closed() ? null : request;
+        if (movement == null) {
+            request.finish(MovementResult.of(manager.closed() ? MovementResult.Status.SHUTDOWN : MovementResult.Status.REMOVED));
+        }
+        if (ending != null) ending.finish(MovementResult.of(MovementResult.Status.SUPERSEDED));
+        return request;
+    }
+
+    synchronized boolean installRoute(MovementRequest request, List<double[]> route, double speed) {
+        if (movement != request || removed || manager.closed()) {
+            return false;
+        }
+        waypoints.clear();
+        for (double[] point : route) {
+            waypoints.add(point.clone());
+        }
+        walkSpeed = Math.max(0.05, speed);
+        walkTarget = waypoints.poll();
+        request.ready();
+        return true;
+    }
+
+    synchronized void cancelMovement(MovementRequest request, MovementResult.Status status) {
+        completeMovement(request, MovementResult.of(status));
+    }
+
+    synchronized void completeMovement(MovementRequest request, MovementResult outcome) {
+        if (movement == request) {
+            movement = null;
+            walkTarget = null;
+            waypoints.clear();
+            request.finish(outcome);
+        }
+    }
+
+    synchronized long movementGeneration() {
+        return movementGeneration;
+    }
+
+    synchronized double[] dimensions(NavigationOptions options) {
+        double width = switch (type) {
+            case SLIME, MAGMA_CUBE -> 2.1;
+            case RAVAGER -> 2.0;
+            case ENDER_DRAGON -> 16;
+            case GHAST -> 4;
+            case GIANT -> 4;
+            case IRON_GOLEM -> 1.4;
+            case HORSE, DONKEY, MULE, CAMEL -> 1.7;
+            case SPIDER -> 1.4;
+            case PLAYER, ZOMBIE, SKELETON, VILLAGER, ENDERMAN -> 0.6;
+            default -> 4.0;
+        };
+        double height = switch (type) {
+            case ENDERMAN -> 2.9;
+            case IRON_GOLEM -> 2.7;
+            case WARDEN -> 2.9;
+            case CAMEL -> 2.4;
+            case CHICKEN, RABBIT -> 0.7;
+            case SPIDER -> 0.9;
+            case SLIME, MAGMA_CUBE -> 2.1;
+            case ENDER_DRAGON -> 8;
+            case GIANT -> 12;
+            case GHAST -> 4;
+            case PLAYER -> 1.8;
+            default -> 4.0;
+        };
+        var registered = manager.bodySize(type);
+        if (registered.isPresent()) {
+            width = Math.max(0.0625, registered.get().width());
+            height = Math.max(0.0625, registered.get().height());
+        }
+        boolean living = type.getEntityClass() != null
+                && org.bukkit.entity.LivingEntity.class.isAssignableFrom(type.getEntityClass());
+        if (pose == NpcPose.SLEEPING && living
+                || type == EntityType.PLAYER && (pose == NpcPose.SWIMMING || pose == NpcPose.FALL_FLYING)) {
+            height = Math.min(height, 0.6);
+        } else if (type == EntityType.PLAYER && pose == NpcPose.CROUCHING) {
+            height *= 0.85;
+        }
+        boolean ageable = type.getEntityClass() != null
+                && org.bukkit.entity.Ageable.class.isAssignableFrom(type.getEntityClass());
+        double factor = scale * (baby && ageable ? 0.5 : 1.0);
+        return new double[]{options.width() > 0 ? options.width() : width * factor,
+                options.height() > 0 ? options.height() : height * factor};
+    }
+
+    @Override
+    public synchronized net.folianpc.api.BehaviorTask patrol(List<Location> points, net.folianpc.api.PatrolOptions options) {
+        ensureLive();
+        java.util.Objects.requireNonNull(options, "options");
+        List<Location> copied = java.util.Objects.requireNonNull(points, "waypoints").stream()
+                .map(point -> java.util.Objects.requireNonNull(point, "waypoint").clone()).toList();
+        if (copied.isEmpty()) throw new IllegalArgumentException("Patrol needs at least one waypoint");
+        copied.forEach(NpcImpl::toPosition);
+        endBehavior(MovementResult.Status.SUPERSEDED);
+        endMovement(MovementResult.Status.SUPERSEDED);
+        behavior = new NpcBehavior(this, manager, copied, options, null, null);
+        return behavior;
+    }
+
+    @Override
+    public synchronized net.folianpc.api.BehaviorTask follow(UUID player, net.folianpc.api.FollowOptions options) {
+        ensureLive();
+        java.util.Objects.requireNonNull(player, "player");
+        java.util.Objects.requireNonNull(options, "options");
+        endBehavior(MovementResult.Status.SUPERSEDED);
+        endMovement(MovementResult.Status.SUPERSEDED);
+        behavior = new NpcBehavior(this, manager, List.of(), null, player, options);
+        return behavior;
+    }
+
+    synchronized void tickBehavior() {
+        if (behavior != null) behavior.tick();
+    }
+
+    void clearBehavior(NpcBehavior ending) {
+        if (behavior == ending) behavior = null;
+    }
+
+    private void endBehavior(MovementResult.Status status) {
+        NpcBehavior ending = behavior;
+        behavior = null;
+        if (ending != null) ending.finish(MovementResult.of(status));
+    }
+
+    private void invalidateClearance() {
+        endBehavior(MovementResult.Status.SUPERSEDED);
+        endMovement(MovementResult.Status.SUPERSEDED);
+    }
+
+    private void endMovement(MovementResult.Status status) {
+        movementGeneration++;
+        MovementRequest ending = movement;
+        movement = null;
+        walkTarget = null;
+        waypoints.clear();
+        if (ending != null) {
+            ending.finish(MovementResult.of(status));
+        }
+    }
+
+    private void arrived() {
+        if (walkTarget == null && movement != null) {
+            MovementRequest ending = movement;
+            movement = null;
+            ending.finish(MovementResult.of(MovementResult.Status.ARRIVED));
+        }
+    }
+
+    @Override
+    public synchronized Npc stopWalking() {
+        ensureLive();
+        endBehavior(MovementResult.Status.CANCELLED);
+        endMovement(MovementResult.Status.CANCELLED);
         return this;
     }
 
@@ -169,7 +350,7 @@ public final class NpcImpl implements Npc {
         return walkTarget != null;
     }
 
-    double[] stepWalk(double seconds) {
+    synchronized double[] stepWalk(double seconds) {
         double[] target = walkTarget;
         if (target == null) {
             return null;
@@ -181,6 +362,7 @@ public final class NpcImpl implements Npc {
         double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (distance < 1e-4) {
             walkTarget = waypoints.poll();
+            arrived();
             return null;
         }
         float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
@@ -188,6 +370,7 @@ public final class NpcImpl implements Npc {
         if (distance <= step) {
             this.position = new Position(from.world(), target[0], target[1], target[2], yaw, from.pitch());
             walkTarget = waypoints.poll();
+            arrived();
             return new double[]{dx, dy, dz};
         }
         double f = step / distance;
@@ -202,6 +385,20 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
+    public synchronized Npc visibilityHysteresis(double blocks) {
+        ensureLive();
+        finite(blocks, "visibility hysteresis");
+        if (blocks < 0) {
+            throw new IllegalArgumentException("Visibility hysteresis must be nonnegative");
+        }
+        visibilityHysteresis = blocks;
+        return this;
+    }
+
+    @Override
+    public double visibilityHysteresis() { return visibilityHysteresis; }
+
+    @Override
     public UUID id() {
         return uuid;
     }
@@ -212,14 +409,19 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc name(String name) {
-        this.name = name == null || name.isBlank() ? "NPC" : name;
+    public synchronized Npc name(String name) {
+        ensureLive();
+        String next = name == null || name.isBlank() ? "NPC" : name;
+        if (java.util.Objects.equals(this.name, next)) return this;
+        this.name = next;
         refresh(nametagIds);
         return this;
     }
 
     @Override
-    public Npc viewDistance(double blocks) {
+    public synchronized Npc viewDistance(double blocks) {
+        ensureLive();
+        finite(blocks, "view distance");
         this.viewDistance = blocks;
         return this;
     }
@@ -235,8 +437,12 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc type(EntityType type) {
-        this.type = type != null ? type : EntityType.PLAYER;
+    public synchronized Npc type(EntityType type) {
+        ensureLive();
+        EntityType next = type != null ? type : EntityType.PLAYER;
+        if (this.type == next) return this;
+        this.type = next;
+        invalidateClearance();
         refresh(nametagIds);
         return this;
     }
@@ -278,7 +484,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc lookAtPlayers(boolean enabled) {
+    public synchronized Npc lookAtPlayers(boolean enabled) {
+        ensureLive();
         this.lookAtPlayers = enabled;
         return this;
     }
@@ -289,16 +496,55 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc onClick(NpcClickListener listener) {
+    public synchronized Npc onClick(NpcClickListener listener) {
+        ensureLive();
         this.clickListener = listener;
         return this;
     }
 
     @Override
-    public Npc skin(Skin skin) {
+    public synchronized Npc skin(Skin skin) {
+        ensureLive();
+        boolean changed = !java.util.Objects.equals(this.skin, skin);
         this.skin = skin;
-        refresh(nametagIds);
+        endSkin(SkinApplyResult.Status.SUPERSEDED);
+        if (changed) refresh(nametagIds);
         return this;
+    }
+
+    @Override
+    public synchronized CompletableFuture<SkinApplyResult> skinAsync(java.util.concurrent.CompletionStage<Skin> fetch) {
+        ensureLive();
+        java.util.Objects.requireNonNull(fetch, "skin");
+        CompletableFuture<SkinApplyResult> ending = pendingSkin;
+        CompletableFuture<SkinApplyResult> ticket = new CompletableFuture<>();
+        pendingSkin = ticket;
+        if (ending != null) ending.complete(new SkinApplyResult(SkinApplyResult.Status.SUPERSEDED, java.util.Optional.empty()));
+        fetch.whenComplete((value, failure) -> {
+            synchronized (NpcImpl.this) {
+                if (pendingSkin != ticket) return;
+                pendingSkin = null;
+                if (failure != null || value == null) {
+                    ticket.complete(new SkinApplyResult(SkinApplyResult.Status.FAILED,
+                            java.util.Optional.of(failure == null ? new NullPointerException("Fetched skin") : failure)));
+                } else if (removed || manager.closed()) {
+                    ticket.complete(new SkinApplyResult(manager.closed() ? SkinApplyResult.Status.SHUTDOWN
+                            : SkinApplyResult.Status.REMOVED, java.util.Optional.empty()));
+                } else {
+                    boolean changed = !java.util.Objects.equals(skin, value);
+                    skin = value;
+                    if (changed) refresh(nametagIds);
+                    ticket.complete(new SkinApplyResult(SkinApplyResult.Status.APPLIED, java.util.Optional.empty()));
+                }
+            }
+        });
+        return ticket.copy();
+    }
+
+    private void endSkin(SkinApplyResult.Status status) {
+        CompletableFuture<SkinApplyResult> ending = pendingSkin;
+        pendingSkin = null;
+        if (ending != null) ending.complete(new SkinApplyResult(status, java.util.Optional.empty()));
     }
 
     @Override
@@ -307,9 +553,12 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc mirrorSkin(boolean enabled) {
-        this.mirrorSkin = enabled;
-        refresh(nametagIds);
+    public synchronized Npc mirrorSkin(boolean enabled) {
+        ensureLive();
+        boolean changed = mirrorSkin != enabled;
+        mirrorSkin = enabled;
+        endSkin(SkinApplyResult.Status.SUPERSEDED);
+        if (changed) refresh(nametagIds);
         return this;
     }
 
@@ -319,26 +568,33 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc equipment(EquipmentSlot slot, ItemStack item) {
-        if (item == null || item.getType().isAir()) {
+    public synchronized Npc equipment(EquipmentSlot slot, ItemStack item) {
+        ensureLive();
+        java.util.Objects.requireNonNull(slot, "slot");
+        ItemStack next = item == null || item.getType().isAir() ? null : item.clone();
+        if (java.util.Objects.equals(equipment.get(slot), next)) return this;
+        if (next == null) {
             equipment.remove(slot);
         } else {
-            equipment.put(slot, item.clone());
+            equipment.put(slot, next);
         }
         if (!removed) {
-            manager.updateEquipment(this);
+            publishEquipment(slot);
         }
         return this;
     }
 
     @Override
-    public Map<EquipmentSlot, ItemStack> equipment() {
-        return Map.copyOf(equipment);
+    public synchronized Map<EquipmentSlot, ItemStack> equipment() {
+        return ItemCopies.copy(equipment);
     }
 
     @Override
-    public Npc nametag(List<String> lines) {
+    public synchronized Npc nametag(List<String> lines) {
+        ensureLive();
         List<String> clean = lines == null ? List.of() : List.copyOf(lines);
+        if (nametag.equals(clean) && nametagVisible == clean.isEmpty()) return this;
+        boolean respawn = clean.size() != nametagIds.length || nametagVisible != clean.isEmpty();
         int[] stale = nametagIds;
         if (clean.size() != nametagIds.length) {
             int[] ids = new int[clean.size()];
@@ -349,7 +605,7 @@ public final class NpcImpl implements Npc {
         }
         this.nametag = clean;
         this.nametagVisible = clean.isEmpty();
-        refresh(stale);
+        if (respawn) refresh(stale); else publishNametag();
         return this;
     }
 
@@ -359,7 +615,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc nametagVisible(boolean visible) {
+    public synchronized Npc nametagVisible(boolean visible) {
+        ensureLive();
+        if (java.util.Objects.equals(this.nametagVisible, visible)) return this;
         this.nametagVisible = visible;
         refresh(nametagIds);
         return this;
@@ -371,14 +629,15 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc nametagStyle(NametagStyle style) {
+    public synchronized Npc nametagStyle(NametagStyle style) {
+        ensureLive();
         NametagStyle next = style == null ? NametagStyle.defaults() : style;
         if (next.equals(nametagStyle)) {
             return this;
         }
         this.nametagStyle = next;
         if (!removed && !nametag.isEmpty()) {
-            manager.updateNametag(this);
+            publishNametag();
         }
         return this;
     }
@@ -389,7 +648,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc glowing(boolean value) {
+    public synchronized Npc glowing(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.glowing, value)) return this;
         this.glowing = value;
         return pushMeta();
     }
@@ -400,7 +661,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc invisible(boolean value) {
+    public synchronized Npc invisible(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.invisible, value)) return this;
         this.invisible = value;
         return pushMeta();
     }
@@ -411,7 +674,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc skinLayers(boolean value) {
+    public synchronized Npc skinLayers(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.skinLayers, value)) return this;
         this.skinLayers = value;
         return pushMeta();
     }
@@ -422,10 +687,15 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc scale(double value) {
-        this.scale = Math.max(0.0625, value);
+    public synchronized Npc scale(double value) {
+        ensureLive();
+        finite(value, "scale");
+        double next = Math.max(0.0625, value);
+        if (scale == next) return this;
+        this.scale = next;
+        invalidateClearance();
         if (!removed) {
-            manager.updateScale(this);
+            publishScale();
         }
         return this;
     }
@@ -436,7 +706,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc metadata(int index, MetadataType type, Object value) {
+    public synchronized Npc metadata(int index, MetadataType type, Object value) {
+        ensureLive();
         if (value == null) {
             rawMeta.remove(index);
         } else {
@@ -446,8 +717,13 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc pose(NpcPose pose) {
-        this.pose = pose == null ? NpcPose.STANDING : pose;
+    public synchronized Npc pose(NpcPose pose) {
+        ensureLive();
+        NpcPose next = pose == null ? NpcPose.STANDING : pose;
+        if (this.pose == next) return this;
+        this.pose = next;
+        invalidateClearance();
+        publishNametag();
         return pushMeta();
     }
 
@@ -457,8 +733,12 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc baby(boolean value) {
+    public synchronized Npc baby(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.baby, value)) return this;
         this.baby = value;
+        invalidateClearance();
+        publishNametag();
         return pushMeta();
     }
 
@@ -468,7 +748,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc variant(int value) {
+    public synchronized Npc variant(int value) {
+        ensureLive();
+        if (java.util.Objects.equals(mobVariant.variant(), value)) return this;
         this.mobVariant = new MobVariant(value, mobVariant.variantName(), mobVariant.villagerProfession(),
                 mobVariant.villagerType(), mobVariant.villagerLevel());
         return pushMeta();
@@ -480,7 +762,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc variant(String name) {
+    public synchronized Npc variant(String name) {
+        ensureLive();
+        if (java.util.Objects.equals(mobVariant.variantName(), name)) return this;
         this.mobVariant = new MobVariant(mobVariant.variant(), name, mobVariant.villagerProfession(),
                 mobVariant.villagerType(), mobVariant.villagerLevel());
         return pushMeta();
@@ -492,7 +776,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc villagerProfession(String profession) {
+    public synchronized Npc villagerProfession(String profession) {
+        ensureLive();
+        if (java.util.Objects.equals(mobVariant.villagerProfession(), profession)) return this;
         this.mobVariant = new MobVariant(mobVariant.variant(), mobVariant.variantName(), profession,
                 mobVariant.villagerType(), mobVariant.villagerLevel());
         return pushMeta();
@@ -504,7 +790,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc villagerType(String biomeType) {
+    public synchronized Npc villagerType(String biomeType) {
+        ensureLive();
+        if (java.util.Objects.equals(mobVariant.villagerType(), biomeType)) return this;
         this.mobVariant = new MobVariant(mobVariant.variant(), mobVariant.variantName(),
                 mobVariant.villagerProfession(), biomeType, mobVariant.villagerLevel());
         return pushMeta();
@@ -516,7 +804,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc villagerLevel(int level) {
+    public synchronized Npc villagerLevel(int level) {
+        ensureLive();
+        if (java.util.Objects.equals(mobVariant.villagerLevel(), level)) return this;
         this.mobVariant = new MobVariant(mobVariant.variant(), mobVariant.variantName(),
                 mobVariant.villagerProfession(), mobVariant.villagerType(), level);
         return pushMeta();
@@ -533,13 +823,17 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc mobVariant(MobVariant variant) {
-        this.mobVariant = variant == null ? MobVariant.defaults() : variant;
+    public synchronized Npc mobVariant(MobVariant variant) {
+        ensureLive();
+        MobVariant next = variant == null ? MobVariant.defaults() : variant;
+        if (mobVariant.equals(next)) return this;
+        this.mobVariant = next;
         return pushMeta();
     }
 
     @Override
-    public Npc swing() {
+    public synchronized Npc swing() {
+        ensureLive();
         if (!removed) {
             manager.animate(this, 0);
         }
@@ -547,7 +841,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc swingOffHand() {
+    public synchronized Npc swingOffHand() {
+        ensureLive();
         if (!removed) {
             manager.animate(this, 3);
         }
@@ -555,7 +850,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc playEmote(Emote emote) {
+    public synchronized Npc playEmote(Emote emote) {
+        ensureLive();
         if (!removed && emote != null) {
             manager.playEmote(this, emote);
         }
@@ -563,14 +859,17 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc onPlayerNear(double radius, BiConsumer<Npc, Player> callback) {
+    public synchronized Npc onPlayerNear(double radius, BiConsumer<Npc, Player> callback) {
+        ensureLive();
+        finite(radius, "proximity radius");
         this.proximityRadius = Math.max(0.0, radius);
         this.nearCallback = callback;
         return this;
     }
 
     @Override
-    public Npc onPlayerLeave(BiConsumer<Npc, Player> callback) {
+    public synchronized Npc onPlayerLeave(BiConsumer<Npc, Player> callback) {
+        ensureLive();
         this.leaveCallback = callback;
         return this;
     }
@@ -607,15 +906,17 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc refreshNametag() {
+    public synchronized Npc refreshNametag() {
+        ensureLive();
         if (!removed) {
-            manager.updateNametag(this);
+            publishNametag();
         }
         return this;
     }
 
     @Override
-    public Npc autoRefreshNametag(long everyTicks) {
+    public synchronized Npc autoRefreshNametag(long everyTicks) {
+        ensureLive();
         this.nametagRefreshPasses = everyTicks <= 0 ? 0 : Math.max(1, (int) (everyTicks / 2));
         this.nametagRefreshCountdown = nametagRefreshPasses;
         return this;
@@ -633,7 +934,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc glowColor(NamedTextColor color) {
+    public synchronized Npc glowColor(NamedTextColor color) {
+        ensureLive();
+        if (java.util.Objects.equals(this.glowColor, color)) return this;
         this.glowColor = color;
         refresh(nametagIds);
         return this;
@@ -645,7 +948,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc collidable(boolean value) {
+    public synchronized Npc collidable(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.collidable, value)) return this;
         this.collidable = value;
         refresh(nametagIds);
         return this;
@@ -657,7 +962,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc showInTabList(boolean value) {
+    public synchronized Npc showInTabList(boolean value) {
+        ensureLive();
+        if (java.util.Objects.equals(this.showInTabList, value)) return this;
         this.showInTabList = value;
         refresh(nametagIds);
         return this;
@@ -669,12 +976,20 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public NpcAppearance appearance() {
+    public synchronized NpcAppearance appearance() {
         return new NpcAppearance(glowing, invisible, skinLayers, scale, glowColor, collidable, nametagVisible);
     }
 
     @Override
-    public Npc appearance(NpcAppearance appearance) {
+    public synchronized Npc appearance(NpcAppearance appearance) {
+        ensureLive();
+        java.util.Objects.requireNonNull(appearance, "appearance");
+        if (appearance().equals(appearance)) return this;
+        boolean respawn = !java.util.Objects.equals(glowColor, appearance.glowColor())
+                || collidable != appearance.collidable() || nametagVisible != appearance.nametagVisible();
+        boolean metaChanged = glowing != appearance.glowing() || invisible != appearance.invisible()
+                || skinLayers != appearance.skinLayers();
+        boolean clearanceChanged = scale != appearance.scale();
         this.glowing = appearance.glowing();
         this.invisible = appearance.invisible();
         this.skinLayers = appearance.skinLayers();
@@ -682,30 +997,39 @@ public final class NpcImpl implements Npc {
         this.glowColor = appearance.glowColor();
         this.collidable = appearance.collidable();
         this.nametagVisible = appearance.nametagVisible();
-        refresh(nametagIds);
+        if (clearanceChanged) invalidateClearance();
+        if (respawn) refresh(nametagIds);
+        else {
+            if (metaChanged) pushMeta();
+            if (clearanceChanged) publishScale();
+        }
         return this;
     }
 
     @Override
-    public Npc showTo(UUID playerId) {
+    public synchronized Npc showTo(UUID playerId) {
+        ensureLive();
         visibility.put(playerId, Boolean.TRUE);
         return this;
     }
 
     @Override
-    public Npc hideFrom(UUID playerId) {
+    public synchronized Npc hideFrom(UUID playerId) {
+        ensureLive();
         visibility.put(playerId, Boolean.FALSE);
         return this;
     }
 
     @Override
-    public Npc resetVisibility(UUID playerId) {
+    public synchronized Npc resetVisibility(UUID playerId) {
+        ensureLive();
         visibility.remove(playerId);
         return this;
     }
 
     @Override
-    public Npc visibleWhen(java.util.function.Predicate<org.bukkit.entity.Player> condition) {
+    public synchronized Npc visibleWhen(java.util.function.Predicate<org.bukkit.entity.Player> condition) {
+        ensureLive();
         this.visibleWhen = condition;
         return this;
     }
@@ -773,16 +1097,19 @@ public final class NpcImpl implements Npc {
     }
 
     void dropVisibility(UUID playerId) {
+        viewerAppearances.remove(playerId);
         visibility.remove(playerId);
     }
 
     @Override
-    public Npc addAction(ClickType type, NpcAction action) {
+    public synchronized Npc addAction(ClickType type, NpcAction action) {
+        ensureLive();
         return addAction(type, action, 0L);
     }
 
     @Override
-    public Npc addAction(ClickType type, NpcAction action, long delayTicks) {
+    public synchronized Npc addAction(ClickType type, NpcAction action, long delayTicks) {
+        ensureLive();
         if (action != null) {
             actions.computeIfAbsent(type, key -> new CopyOnWriteArrayList<>())
                     .add(new ActionEntry(action, Math.max(0L, delayTicks)));
@@ -791,7 +1118,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc clearActions(ClickType type) {
+    public synchronized Npc clearActions(ClickType type) {
+        ensureLive();
         actions.remove(type);
         return this;
     }
@@ -801,7 +1129,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc cooldown(long millis) {
+    public synchronized Npc cooldown(long millis) {
+        ensureLive();
         this.cooldownMillis = Math.max(0L, millis);
         return this;
     }
@@ -841,9 +1170,9 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public void remove() {
+    public synchronized void remove() {
         if (!removed) {
-            removed = true;
+            markRemoved();
             manager.unregister(this);
         }
     }
@@ -853,24 +1182,26 @@ public final class NpcImpl implements Npc {
         return removed;
     }
 
-    public NpcSnapshot snapshot() {
+    public synchronized NpcSnapshot snapshot() {
         Skin current = skin;
+        Position pos = position;
         return new NpcSnapshot(entityId, uuid, name, profileName(), nametagVisible,
                 glowing, invisible, skinLayers, scale,
                 glowColor == null ? null : glowColor.toString(), collidable, needsTeam(),
                 pose.name(), baby, mobVariant,
-                type, position.world(),
-                position.x(), position.y(), position.z(), position.yaw(), position.pitch(),
+                type, pos.world(),
+                pos.x(), pos.y(), pos.z(), pos.yaw(), pos.pitch(),
                 current == null ? null : current.value(),
                 current == null ? null : current.signature(), mirrorSkin, showInTabList,
-                Map.copyOf(equipment), hologram(), Map.copyOf(rawMeta));
+                equipment, hologram(), Map.copyOf(rawMeta));
     }
 
     @Override
-    public NpcData data() {
+    public synchronized NpcData data() {
+        Position pos = position;
         return NpcData.builder()
                 .id(uuid).name(name).type(type)
-                .position(position.world(), position.x(), position.y(), position.z(), position.yaw(), position.pitch())
+                .position(pos.world(), pos.x(), pos.y(), pos.z(), pos.yaw(), pos.pitch())
                 .lookAtPlayers(lookAtPlayers).skin(skin).mirrorSkin(mirrorSkin)
                 .equipment(equipment).nametag(nametag).appearance(appearance()).pose(pose)
                 .baby(baby).showInTabList(showInTabList).mobVariant(mobVariant).owner(owner)
@@ -879,7 +1210,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc owner(UUID playerId) {
+    public synchronized Npc owner(UUID playerId) {
+        ensureLive();
         this.owner = playerId;
         return this;
     }
@@ -890,7 +1222,8 @@ public final class NpcImpl implements Npc {
     }
 
     @Override
-    public Npc copy(Location at) {
+    public synchronized Npc copy(Location at) {
+        ensureLive();
         NpcImpl clone = manager.create(UUID.randomUUID(), name, type, toPosition(at));
         clone.lookAtPlayers = lookAtPlayers;
         clone.clickListener = clickListener;
@@ -900,6 +1233,8 @@ public final class NpcImpl implements Npc {
         clone.cooldownMillis = cooldownMillis;
         clone.visibleWhen = visibleWhen;
         clone.viewDistance = viewDistance;
+        clone.visibilityHysteresis = visibilityHysteresis;
+        clone.nametagLayout = nametagLayout;
         clone.showInTabList = showInTabList;
         clone.nametagStyle = nametagStyle;
         clone.proximityRadius = proximityRadius;
@@ -926,23 +1261,158 @@ public final class NpcImpl implements Npc {
             return List.of();
         }
         List<HologramLine> out = new ArrayList<>(lines.size());
+        double baseY = position.y() + nametagLayout.offset()
+                + (nametagLayout.entityRelative() ? dimensions(DEFAULT_NAVIGATION)[1] : 0);
         for (int i = 0; i < lines.size(); i++) {
-            double y = position.y() + HOLOGRAM_BASE + (lines.size() - 1 - i) * HOLOGRAM_SPACING;
+            double y = baseY + (lines.size() - 1 - i) * nametagLayout.spacing();
             out.add(new HologramLine(ids[i], lines.get(i), position.x(), y, position.z(), style));
         }
         return out;
     }
 
+    synchronized void markRemoved() {
+        removed = true;
+        endBehavior(manager.closed() ? MovementResult.Status.SHUTDOWN : MovementResult.Status.REMOVED);
+        endSkin(manager.closed() ? SkinApplyResult.Status.SHUTDOWN : SkinApplyResult.Status.REMOVED);
+        endMovement(manager.closed() ? MovementResult.Status.SHUTDOWN : MovementResult.Status.REMOVED);
+    }
+
+    private void ensureLive() {
+        if (removed || manager.closed()) {
+            throw new IllegalStateException("NPC has been removed or its manager is closed");
+        }
+    }
+
+    static void finite(double value, String name) {
+        if (!Double.isFinite(value)) {
+            throw new IllegalArgumentException(name + " must be finite");
+        }
+    }
+
+    @Override
+    public synchronized Npc batch(Consumer<Npc> updates) {
+        ensureLive();
+        java.util.Objects.requireNonNull(updates, "updates");
+        batchDepth++;
+        try {
+            updates.accept(this);
+        } finally {
+            if (--batchDepth == 0) flushAppearance();
+        }
+        return this;
+    }
+
+    private void publishScale() {
+        if (batchDepth > 0) dirtyScale = true; else manager.updateScale(this);
+        publishNametag();
+    }
+
+    private void publishEquipment(EquipmentSlot slot) {
+        if (batchDepth > 0) {
+            dirtyEquipment = true;
+            dirtySlots.add(slot);
+        } else manager.updateEquipment(this, Set.of(slot));
+    }
+
+    private void publishNametag() {
+        if (batchDepth > 0) dirtyNametag = true; else manager.updateNametag(this);
+    }
+
+    private void flushAppearance() {
+        boolean respawn = dirtyRefresh;
+        boolean meta = dirtyMeta;
+        boolean scaleUpdate = dirtyScale;
+        boolean equipmentUpdate = dirtyEquipment;
+        Set<EquipmentSlot> changedSlots = Set.copyOf(dirtySlots);
+        dirtySlots.clear();
+        boolean nametagUpdate = dirtyNametag;
+        int[] stale = staleLines.stream().mapToInt(Integer::intValue).toArray();
+        dirtyRefresh = dirtyMeta = dirtyScale = dirtyEquipment = dirtyNametag = false;
+        staleLines.clear();
+        if (removed || manager.closed()) return;
+        if (respawn) {
+            manager.refresh(this, stale);
+        } else {
+            if (meta) manager.updateMeta(this);
+            if (scaleUpdate) manager.updateScale(this);
+            if (equipmentUpdate) manager.updateEquipment(this, changedSlots);
+            if (nametagUpdate) manager.updateNametag(this);
+        }
+    }
+
+    @Override
+    public synchronized Npc nametagLayout(NametagLayout layout) {
+        ensureLive();
+        java.util.Objects.requireNonNull(layout, "layout");
+        if (!nametagLayout.equals(layout)) {
+            nametagLayout = layout;
+            publishNametag();
+        }
+        return this;
+    }
+
+    @Override public NametagLayout nametagLayout() { return nametagLayout; }
+
+    @Override
+    public synchronized Npc appearanceFor(UUID viewer, ViewerAppearance appearance) {
+        ensureLive();
+        java.util.Objects.requireNonNull(viewer, "viewer");
+        java.util.Objects.requireNonNull(appearance, "appearance");
+        if (appearance.equals(viewerAppearances.get(viewer))) return this;
+        viewerAppearances.put(viewer, appearance);
+        manager.refreshViewer(this, viewer);
+        return this;
+    }
+
+    @Override
+    public synchronized Npc clearAppearanceFor(UUID viewer) {
+        ensureLive();
+        if (viewerAppearances.remove(java.util.Objects.requireNonNull(viewer, "viewer")) != null) {
+            manager.refreshViewer(this, viewer);
+        }
+        return this;
+    }
+
+    public synchronized NpcSnapshot snapshot(UUID viewer) {
+        NpcSnapshot base = snapshot();
+        ViewerAppearance override = viewerAppearances.get(viewer);
+        if (override == null) return base;
+        NpcAppearance appearance = override.appearance().orElseGet(this::appearance);
+        Map<EquipmentSlot, ItemStack> equipment = new java.util.EnumMap<>(EquipmentSlot.class);
+        equipment.putAll(base.equipment());
+        override.equipment().forEach((slot, item) -> {
+            if (item.getType().isAir()) equipment.remove(slot); else equipment.put(slot, item);
+        });
+        boolean team = !appearance.nametagVisible() || appearance.glowColor() != null || !appearance.collidable();
+        String wireName = team ? uuid.toString().replace("-", "") : name;
+        String profile = wireName.length() > MAX_PROFILE_NAME ? wireName.substring(0, MAX_PROFILE_NAME) : wireName;
+        double shift = nametagLayout.entityRelative()
+                ? dimensions(DEFAULT_NAVIGATION)[1] * (appearance.scale() / scale - 1) : 0;
+        List<HologramLine> lines = base.hologram().stream().map(line -> new HologramLine(line.entityId(),
+                line.text(), line.x(), line.y() + shift, line.z(), line.style())).toList();
+        return new NpcSnapshot(base.entityId(), base.uuid(), base.name(), profile,
+                appearance.nametagVisible(), appearance.glowing(), appearance.invisible(), appearance.skinLayers(),
+                appearance.scale(), appearance.glowColor() == null ? null : appearance.glowColor().toString(),
+                appearance.collidable(), team, base.pose(), base.baby(), base.mobVariant(), base.type(), base.world(),
+                base.x(), base.y(), base.z(), base.yaw(), base.pitch(), base.skinValue(), base.skinSignature(),
+                base.mirrorSkin(), base.showInTabList(), equipment, lines, base.rawMeta());
+    }
+
     private Npc pushMeta() {
         if (!removed) {
-            manager.updateMeta(this);
+            if (batchDepth > 0) dirtyMeta = true; else manager.updateMeta(this);
         }
         return this;
     }
 
     private void refresh(int[] staleLineIds) {
         if (!removed) {
-            manager.refresh(this, staleLineIds);
+            if (batchDepth > 0) {
+                dirtyRefresh = true;
+                for (int id : staleLineIds) staleLines.add(id);
+            } else {
+                manager.refresh(this, staleLineIds);
+            }
         }
     }
 }

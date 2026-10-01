@@ -271,6 +271,8 @@ class NpcManagerTest {
             clickType.set(type);
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertSame(npc, clicked.get());
@@ -485,6 +487,8 @@ class NpcManagerTest {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         NpcInteractEvent event = firstEvent(NpcInteractEvent.class);
@@ -508,6 +512,8 @@ class NpcManagerTest {
             }
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertTrue(ran.isEmpty(), "a cancelled interaction must run nothing");
@@ -523,6 +529,8 @@ class NpcManagerTest {
         });
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("action"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("action"), ran);
@@ -758,6 +766,19 @@ class NpcManagerTest {
         assertEquals(0.2, npc.x(), 1e-6);
     }
 
+    private void snapshots(World world, boolean sealed) {
+        org.bukkit.Chunk chunk = mock(org.bukkit.Chunk.class);
+        org.bukkit.ChunkSnapshot snapshot = mock(org.bukkit.ChunkSnapshot.class);
+        org.bukkit.Material solid = mock(org.bukkit.Material.class);
+        org.bukkit.Material air = mock(org.bukkit.Material.class);
+        when(solid.isSolid()).thenReturn(true);
+        when(snapshot.getBlockType(anyInt(), anyInt(), anyInt())).thenAnswer(inv ->
+                sealed || (int) inv.getArgument(1) <= 0 ? solid : air);
+        when(chunk.getChunkSnapshot(false, false, false)).thenReturn(snapshot);
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.completedFuture(chunk));
+    }
+
     private World flatWorld(String name) {
         World world = mock(World.class);
         when(world.getName()).thenReturn(name);
@@ -769,6 +790,7 @@ class NpcManagerTest {
         when(air.isSolid()).thenReturn(false);
         when(world.getBlockAt(anyInt(), anyInt(), anyInt())).thenAnswer(inv ->
                 ((int) inv.getArgument(1)) <= 0 ? solid : air);
+        snapshots(world, false);
         return world;
     }
 
@@ -780,6 +802,7 @@ class NpcManagerTest {
         Block solid = mock(Block.class);
         when(solid.isSolid()).thenReturn(true);
         when(world.getBlockAt(anyInt(), anyInt(), anyInt())).thenReturn(solid);
+        snapshots(world, true);
         return world;
     }
 
@@ -834,6 +857,8 @@ class NpcManagerTest {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT, true);
 
         assertTrue(firstEvent(NpcInteractEvent.class).isSneaking());
@@ -1017,6 +1042,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("second"));
         npc.addAction(ClickType.LEFT, ctx -> ran.add("left"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("first", "second"), ran);
@@ -1030,6 +1057,8 @@ class NpcManagerTest {
         npc.onClick((who, clicked, type) -> ran.add("listener"));
         npc.addAction(ClickType.LEFT, ctx -> ran.add("action"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.LEFT);
 
         assertEquals(List.of("listener", "action"), ran);
@@ -1045,6 +1074,8 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
         now.set(1_400L);
@@ -1066,8 +1097,13 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
-        backend.fireInteract(player(UUID.randomUUID()), npc.entityId(), ClickType.RIGHT);
-        backend.fireInteract(player(UUID.randomUUID()), npc.entityId(), ClickType.RIGHT);
+        Player a = player(UUID.randomUUID());
+        Player b = player(UUID.randomUUID());
+        track(a, "world", 0, 64, 5);
+        track(b, "world", 0, 64, 5);
+        manager.tick();
+        backend.fireInteract(a, npc.entityId(), ClickType.RIGHT);
+        backend.fireInteract(b, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(2, runs.get(), "one player's cooldown must not block another");
     }
@@ -1081,6 +1117,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, NpcClickContext::cancelRemaining);
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("never"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("first"), ran);
@@ -1097,6 +1135,8 @@ class NpcManagerTest {
             assertEquals(7, ctx.data().get("hits"));
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.LEFT);
 
         assertEquals(ClickType.LEFT, seen.get());
@@ -1112,6 +1152,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, blocked);
         npc.addAction(ClickType.RIGHT, chained);
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("a", "b"), ran);
@@ -1127,6 +1169,8 @@ class NpcManagerTest {
         });
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("still runs"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("still runs"), ran);
@@ -1140,6 +1184,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
         npc.clearActions(ClickType.RIGHT);
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(0, runs.get());
@@ -1153,7 +1199,7 @@ class NpcManagerTest {
         manager.tick();
         int showsAfterSpawn = backend.shows.size();
 
-        npc.equipment(EquipmentSlot.HAND, null);
+        npc.equipment(EquipmentSlot.HAND, mutableItem(2));
 
         assertEquals(1, backend.equips.size());
         assertEquals(npc.entityId(), backend.equips.get(0).entityId());
@@ -1394,6 +1440,8 @@ class NpcManagerTest {
         assertTrue(copy.showInTabList());
 
         Player p = player(UUID.randomUUID());
+        track(p, copy.world(), copy.x(), copy.y(), copy.z());
+        manager.tick();
         backend.fireInteract(p, ((NpcImpl) copy).entityId(), ClickType.RIGHT);
         assertEquals(List.of("original-action"), ran, "the copy keeps the original's actions");
     }
@@ -1419,6 +1467,7 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
+        manager.tick();
         backend.fireInteract(far, npc.entityId(), ClickType.RIGHT);
         assertEquals(0, runs.get(), "a forged click from a known-distant tracked position must not run");
 
@@ -1427,7 +1476,7 @@ class NpcManagerTest {
     }
 
     @Test
-    void untrackedClicksStillRunSincePositionIsUnknownRatherThanWrong() {
+    void untrackedClicksAreRejected() {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
         AtomicInteger runs = new AtomicInteger();
@@ -1435,7 +1484,7 @@ class NpcManagerTest {
 
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
-        assertEquals(1, runs.get());
+        assertEquals(0, runs.get());
     }
 
     @Test
@@ -1540,4 +1589,532 @@ class NpcManagerTest {
 
         assertEquals(NametagStyle.defaults(), legacy.nametagStyle());
     }
+    @Test
+    void duplicateIdsAndCreationAfterCloseAreRejected() {
+        UUID id = UUID.randomUUID();
+        Position position = new Position("world", 0, 1, 0, 0, 0);
+        NpcImpl original = manager.create(id, "original", org.bukkit.entity.EntityType.PLAYER, position);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> manager.create(id, "replacement", org.bukkit.entity.EntityType.PLAYER, position));
+        assertSame(original, manager.get(id));
+        manager.close();
+        assertTrue(original.removed());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> original.glowing(true));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> manager.create("late", position));
+    }
+
+    @Test
+    void snapshotNavigationReportsSetupThenArrival() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        var task = npc.navigateTo(new Location(flatWorld("world"), 3.5, 1, 0.5), 10,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.ROUTE_FOUND, task.route().join().status());
+        assertFalse(task.result().isDone());
+        for (int pass = 0; pass < 20; pass++) {
+            manager.tick();
+        }
+        assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, task.result().join().status());
+        assertEquals(3.5, npc.x());
+    }
+
+    @Test
+    void cancellationSupersessionRemovalAndShutdownCompletePendingCapture() {
+        for (int ending = 0; ending < 4; ending++) {
+            NpcManager local = new NpcManager(mock(Plugin.class), new RecordingProtocolBackend(), new PlayerTracker());
+            local.events(event -> { });
+            NpcImpl npc = local.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+            World world = flatWorld("world");
+            CompletableFuture<org.bukkit.Chunk> pending = new CompletableFuture<>();
+            when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false))).thenReturn(pending);
+            var task = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4,
+                    net.folianpc.api.NavigationOptions.builder().radius(8).build());
+            switch (ending) {
+                case 0 -> task.cancel();
+                case 1 -> npc.teleport(new Location(world, 20, 1, 0));
+                case 2 -> npc.remove();
+                default -> local.close();
+            }
+            var expected = List.of(net.folianpc.api.MovementResult.Status.CANCELLED,
+                    net.folianpc.api.MovementResult.Status.SUPERSEDED,
+                    net.folianpc.api.MovementResult.Status.REMOVED,
+                    net.folianpc.api.MovementResult.Status.SHUTDOWN).get(ending);
+            assertEquals(expected, task.route().join().status());
+            assertEquals(expected, task.result().join().status());
+            pending.complete(mock(org.bukkit.Chunk.class));
+            assertFalse(npc.moving());
+            local.close();
+        }
+    }
+
+    @Test
+    void failedTerrainCaptureAndRejectedExecutorFinishNavigation() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("load failed")));
+        var failed = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.FAILED, failed.result().join().status());
+        manager.async(task -> { throw new java.util.concurrent.RejectedExecutionException(); });
+        var rejected = npc.navigateTo(new Location(flatWorld("world"), 3.5, 1, 0.5), 4,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.FAILED, rejected.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    private org.bukkit.inventory.ItemStack mutableItem(int amount) {
+        var value = new AtomicInteger(amount);
+        var item = mock(org.bukkit.inventory.ItemStack.class);
+        var material = mock(org.bukkit.Material.class);
+        when(item.getType()).thenReturn(material);
+        when(item.getAmount()).thenAnswer(inv -> value.get());
+        org.mockito.Mockito.doAnswer(inv -> { value.set(inv.getArgument(0)); return null; }).when(item).setAmount(anyInt());
+        when(item.clone()).thenAnswer(inv -> mutableItem(value.get()));
+        return item;
+    }
+
+    @Test
+    void finiteInputsAndIndependentEquipmentSnapshotsAreEnforced() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> npc.scale(Double.NaN));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> npc.viewDistance(Double.POSITIVE_INFINITY));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> npc.walkTo(new Location(null, Double.NaN, 64, 0), 4));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> npc.walkTo(new Location(null, 0, 64, 0), Double.NaN));
+        org.bukkit.inventory.ItemStack item = mutableItem(2);
+        npc.equipment(org.bukkit.inventory.EquipmentSlot.HAND, item);
+        item.setAmount(9);
+        var data = npc.data();
+        var snapshot = npc.snapshot();
+        npc.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(8);
+        data.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(7);
+        snapshot.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(6);
+        assertEquals(2, npc.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+        assertEquals(2, data.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+        assertEquals(2, snapshot.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+    }
+
+    @Test
+    void hiddenAndStaleEntityClicksAreRejected() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        AtomicInteger clicks = new AtomicInteger();
+        npc.onClick((player, target, type) -> clicks.incrementAndGet());
+        npc.visibleWhen(player -> false);
+        manager.tick();
+        assertTrue(backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT));
+        assertEquals(0, clicks.get());
+        npc.visibleWhen(player -> true);
+        manager.tick();
+        backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT);
+        assertEquals(1, clicks.get());
+        npc.remove();
+        assertFalse(backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT));
+        assertEquals(1, clicks.get());
+    }
+
+    @Test
+    void hysteresisKeepsExistingViewerWithinHideMargin() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        npc.viewDistance(10).visibilityHysteresis(2);
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 9, 64, 0);
+        manager.tick();
+        assertTrue(npc.viewers().contains(viewer.getUniqueId()));
+        track(viewer, "world", 11, 64, 0);
+        manager.tick();
+        assertTrue(npc.viewers().contains(viewer.getUniqueId()));
+        track(viewer, "world", 13, 64, 0);
+        manager.tick();
+        assertFalse(npc.viewers().contains(viewer.getUniqueId()));
+    }
+
+    @Test
+    void appearanceBatchCombinesRespawnsAndPartialUpdates() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        backend.shows.clear();
+        npc.batch(target -> target.name("Alice").glowing(true).scale(2).collidable(false));
+        assertEquals(1, backend.shows.size());
+        assertEquals("Alice", backend.shows.getFirst().npc().name());
+        assertEquals(2, backend.shows.getFirst().npc().scale());
+        assertTrue(backend.shows.getFirst().npc().glowing());
+        assertTrue(backend.metas.isEmpty());
+        backend.shows.clear();
+        npc.batch(target -> target.glowing(false).invisible(true).skinLayers(false));
+        assertEquals(1, backend.metas.size());
+        assertTrue(backend.shows.isEmpty());
+        npc.batch(target -> target.batch(inner -> inner.glowing(true)));
+        assertEquals(2, backend.metas.size());
+    }
+
+    @Test
+    void unchangedAppearanceAvoidsPacketsAndThrowingBatchFlushesCompletedMutations() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        backend.shows.clear();
+        npc.name("Bob").skin(null).mirrorSkin(false).nametagVisible(true).glowing(false)
+                .invisible(false).skinLayers(true).scale(1).baby(false).collidable(true)
+                .showInTabList(false).pose(net.folianpc.api.NpcPose.STANDING).appearance(npc.appearance());
+        assertTrue(backend.shows.isEmpty());
+        assertTrue(backend.metas.isEmpty());
+        assertTrue(backend.scales.isEmpty());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> npc.batch(target -> { target.glowing(true); throw new IllegalStateException("partial"); }));
+        assertTrue(npc.glowing());
+        assertEquals(1, backend.metas.size());
+        npc.invisible(true);
+        assertEquals(2, backend.metas.size());
+    }
+
+    @Test
+    void viewerOverridesStayIndependentAndDisconnectClearsThem() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player a = player(UUID.randomUUID());
+        Player b = player(UUID.randomUUID());
+        track(a, "world", 0, 64, 1);
+        track(b, "world", 0, 64, 2);
+        var alternate = new net.folianpc.api.NpcAppearance(true, false, true, 2,
+                net.kyori.adventure.text.format.NamedTextColor.RED, true, false);
+        npc.appearanceFor(a.getUniqueId(), net.folianpc.api.ViewerAppearance.builder().appearance(alternate).build());
+        manager.tick();
+        var shownA = backend.shows.stream().filter(show -> show.viewer() == a).findFirst().orElseThrow().npc();
+        var shownB = backend.shows.stream().filter(show -> show.viewer() == b).findFirst().orElseThrow().npc();
+        assertTrue(shownA.glowing());
+        assertTrue(shownA.needsTeam());
+        assertEquals(2, shownA.scale());
+        assertFalse(shownB.glowing());
+        assertFalse(npc.glowing());
+        npc.clearAppearanceFor(a.getUniqueId());
+        assertFalse(npc.snapshot(a.getUniqueId()).glowing());
+        npc.appearanceFor(a.getUniqueId(), net.folianpc.api.ViewerAppearance.builder().appearance(alternate).build());
+        manager.dropPlayer(a.getUniqueId());
+        assertFalse(npc.snapshot(a.getUniqueId()).glowing());
+    }
+
+    @Test
+    void nametagLayoutFollowsEntityDimensionsAndSupportsFixedOffsets() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        npc.nametag(List.of("upper", "lower"));
+        assertEquals(66.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.baby(true).scale(2);
+        assertEquals(67.85, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.type(org.bukkit.entity.EntityType.VILLAGER).baby(false).scale(1);
+        double adultHeight = npc.snapshot().hologram().getLast().y();
+        npc.baby(true).scale(2);
+        assertEquals(adultHeight, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.type(org.bukkit.entity.EntityType.ENDERMAN).baby(false);
+        assertEquals(70.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.5, 3, false));
+        assertEquals(67, npc.snapshot().hologram().getLast().y());
+        assertEquals(67.5, npc.snapshot().hologram().getFirst().y());
+    }
+
+    @Test
+    void latestSkinRequestWinsAndDirectChoicesDiscardPendingFetches() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        CompletableFuture<Skin> first = new CompletableFuture<>();
+        CompletableFuture<Skin> second = new CompletableFuture<>();
+        var old = npc.skinAsync(first);
+        var fresh = npc.skinAsync(second);
+        second.complete(Skin.of("new", null));
+        first.complete(Skin.of("old", null));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.SUPERSEDED, old.join().status());
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.APPLIED, fresh.join().status());
+        assertEquals("new", npc.skin().value());
+        CompletableFuture<Skin> third = new CompletableFuture<>();
+        var pending = npc.skinAsync(third);
+        npc.skin(Skin.of("explicit", null));
+        third.complete(Skin.of("late", null));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.SUPERSEDED, pending.join().status());
+        assertEquals("explicit", npc.skin().value());
+        var failed = npc.skinAsync(CompletableFuture.failedFuture(new IllegalStateException("fetch")));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.FAILED, failed.join().status());
+        var removed = npc.skinAsync(new CompletableFuture<>());
+        npc.remove();
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.REMOVED, removed.join().status());
+    }
+
+    @Test
+    void patrolCopiesWaypointsWaitsAndFinishesOrStopsRepeating() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        Location first = new Location(world, 1.5, 1, 0.5);
+        var navigation = net.folianpc.api.NavigationOptions.builder().radius(8).build();
+        var task = npc.patrol(List.of(first, new Location(world, 2.5, 1, 0.5)),
+                new net.folianpc.api.PatrolOptions(10, 4, false, navigation));
+        first.setX(100);
+        for (int pass = 0; pass < 40; pass++) manager.tick();
+        assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, task.result().join().status());
+        assertEquals(2.5, npc.x());
+        var repeating = npc.patrol(List.of(new Location(world, 1.5, 1, 0.5), new Location(world, 2.5, 1, 0.5)),
+                new net.folianpc.api.PatrolOptions(10, 2, true, navigation));
+        for (int pass = 0; pass < 30; pass++) manager.tick();
+        assertFalse(repeating.result().isDone());
+        npc.stopWalking();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, repeating.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    @Test
+    void followUsesOwnedLocationHoldsDistanceAndEndsOnDisconnectOrManualMovement() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        Player target = player(UUID.randomUUID());
+        track(target, "world", 1.5, 1, 0.5);
+        AtomicReference<Location> location = new AtomicReference<>(new Location(world, 1.5, 1, 0.5));
+        when(target.getLocation()).thenAnswer(inv -> location.get().clone());
+        var options = new net.folianpc.api.FollowOptions(4, 2, 20, 2,
+                net.folianpc.api.NavigationOptions.builder().radius(16).build());
+        var task = npc.follow(target.getUniqueId(), options);
+        manager.tick();
+        assertFalse(npc.moving());
+        location.set(new Location(world, 8.5, 1, 0.5));
+        track(target, "world", 8.5, 1, 0.5);
+        manager.tick();
+        manager.tick();
+        assertTrue(npc.moving());
+        npc.walkTo(new Location(world, 2.5, 1, 0.5), 4);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, task.result().join().status());
+        var disconnected = npc.follow(target.getUniqueId(), options);
+        tracker.remove(target.getUniqueId());
+        manager.tick();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, disconnected.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    @Test
+    void removedAndClosedServicesCompletePendingBehaviors() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        var task = npc.patrol(List.of(new Location(flatWorld("world"), 3.5, 1, 0.5)), net.folianpc.api.PatrolOptions.defaults());
+        manager.close();
+        assertEquals(net.folianpc.api.MovementResult.Status.SHUTDOWN, task.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    @Test
+    void appearanceRecipeAndSameSizeTextChangesSendOnlyRequiredPackets() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("before"));
+        manager.tick();
+        backend.shows.clear();
+        npc.batch(target -> target.appearance(new net.folianpc.api.NpcAppearance(true, false, true, 1, null, true, false))
+                .nametag(List.of("after")));
+        assertTrue(backend.shows.isEmpty());
+        assertEquals(1, backend.metas.size());
+        assertEquals(1, backend.hologramRefreshes.size());
+        assertEquals("after", backend.hologramRefreshes.getFirst().hologram().getFirst().text());
+    }
+
+    @Test
+    void clearanceChangesSupersedeCapturedNavigationAndObserverCallbacksCanStartNewRequests() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        CompletableFuture<org.bukkit.Chunk> pending = new CompletableFuture<>();
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false))).thenReturn(pending);
+        var options = net.folianpc.api.NavigationOptions.builder().radius(8).build();
+        var task = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4, options);
+        npc.scale(2);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, task.result().join().status());
+        npc.scale(1);
+        var first = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4, options);
+        AtomicReference<net.folianpc.api.MovementTask> callback = new AtomicReference<>();
+        first.result().thenAccept(outcome -> callback.set(npc.navigateTo(new Location(world, 2.5, 1, 0.5), 4, options)));
+        var second = npc.navigateTo(new Location(world, 4.5, 1, 0.5), 4, options);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, second.result().join().status());
+        assertNotNull(callback.get());
+        callback.get().cancel();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, callback.get().result().join().status());
+    }
+
+    @Test
+    void legacyNavigationRetainsSolidGroundPolicyWhileNewDefaultsAvoidWater() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        org.bukkit.Material solid = mock(org.bukkit.Material.class);
+        when(solid.isSolid()).thenReturn(true);
+        org.bukkit.Material air = mock(org.bukkit.Material.class);
+        org.bukkit.Material water = mock(org.bukkit.Material.class);
+        when(water.ordinal()).thenReturn(org.bukkit.Material.WATER.ordinal());
+        org.bukkit.Chunk chunk = mock(org.bukkit.Chunk.class);
+        org.bukkit.ChunkSnapshot snapshot = mock(org.bukkit.ChunkSnapshot.class);
+        when(snapshot.getBlockType(anyInt(), anyInt(), anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return y <= 0 ? solid : x == 1 && z == 0 && y == 1 ? water : air;
+        });
+        when(chunk.getChunkSnapshot(false, false, false)).thenReturn(snapshot);
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.completedFuture(chunk));
+        Location destination = new Location(world, 1.5, 1, 0.5);
+        assertTrue(npc.navigateTo(destination, 4).join());
+        var safe = npc.navigateTo(destination, 4, net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.UNREACHABLE, safe.result().join().status());
+    }
+
+    @Test
+    void equipmentBatchesRetainChangedSlotsIncludingExplicitClears() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.equipment(EquipmentSlot.HAND, mutableItem(2));
+        manager.tick();
+        npc.batch(target -> target.equipment(EquipmentSlot.HAND, null)
+                .equipment(EquipmentSlot.OFF_HAND, mutableItem(3)));
+        assertEquals(1, backend.equips.size());
+        assertEquals(Set.of(EquipmentSlot.HAND, EquipmentSlot.OFF_HAND), backend.equipmentChanges.getFirst());
+        assertFalse(backend.equips.getFirst().equipment().containsKey(EquipmentSlot.HAND));
+        assertEquals(3, backend.equips.getFirst().equipment().get(EquipmentSlot.OFF_HAND).getAmount());
+        npc.equipment(EquipmentSlot.OFF_HAND, null);
+        assertEquals(Set.of(EquipmentSlot.OFF_HAND), backend.equipmentChanges.getLast());
+        assertTrue(backend.equips.getLast().equipment().isEmpty());
+    }
+
+    @Test
+    void registeredDimensionsDriveClearanceAndNametagsWithoutShrinkingUnsupportedPoses() {
+        backend.sizes.put(org.bukkit.entity.EntityType.POLAR_BEAR, new net.folianpc.internal.protocol.BodySize(1.4, 1.4));
+        NpcImpl npc = manager.create(UUID.randomUUID(), "Bear", org.bukkit.entity.EntityType.POLAR_BEAR,
+                new Position("world", 0.5, 1, 0.5, 0, 0));
+        npc.nametag(List.of("bear"));
+        var options = net.folianpc.api.NavigationOptions.defaults();
+        assertEquals(1.4, npc.dimensions(options)[0]);
+        assertEquals(1.4, npc.dimensions(options)[1]);
+        npc.pose(net.folianpc.api.NpcPose.SWIMMING);
+        assertEquals(1.4, npc.dimensions(options)[1]);
+        npc.baby(true).scale(2);
+        assertEquals(1.4, npc.dimensions(options)[0]);
+        assertEquals(2.65, npc.snapshot().hologram().getFirst().y(), 1e-6);
+        assertEquals(0.5, npc.dimensions(net.folianpc.api.NavigationOptions.builder().dimensions(0.5, 0.75).build())[0]);
+    }
+
+    @Test
+    void arrivalCallbacksKeepCommittedMovementWhenStoppingOrStartingAnotherRoute() {
+        for (int mode = 0; mode < 3; mode++) {
+            NpcImpl npc = manager.create("Arrival", new Position("world", 0, 64, 0, 0, 0));
+            Player viewer = player(UUID.randomUUID());
+            track(viewer, "world", 0, 64, 1);
+            manager.tick();
+            var request = npc.beginMovement();
+            npc.installRoute(request, List.of(new double[]{0.2, 64, 0}), 4);
+            int action = mode;
+            request.result().thenRun(() -> {
+                if (action == 0) npc.stopWalking();
+                else if (action == 1) npc.walkToward(1, 64, 0, 4);
+                else {
+                    var replacement = npc.beginMovement();
+                    npc.installRoute(replacement, List.of(new double[]{1, 64, 0}), 4);
+                }
+            });
+            manager.tick();
+            assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, request.result().join().status());
+            assertEquals(0.2, backend.moves.stream().filter(move -> move.viewer() == viewer
+                    && move.entityId() == npc.entityId()).mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+            if (mode > 0) {
+                manager.tick();
+                assertEquals(npc.x(), backend.moves.stream().filter(move -> move.viewer() == viewer
+                        && move.entityId() == npc.entityId()).mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+            }
+            npc.remove();
+            tracker.remove(viewer.getUniqueId());
+        }
+    }
+
+    @Test
+    void queuedMovementCoalescesAgainstThePositionAlreadySentToEachViewer() {
+        NpcImpl npc = manager.create("Queued", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        List<Runnable> queued = new ArrayList<>();
+        try (var schedulers = org.mockito.Mockito.mockStatic(Schedulers.class)) {
+            schedulers.when(() -> Schedulers.onEntity(org.mockito.ArgumentMatchers.any(Plugin.class),
+                    org.mockito.ArgumentMatchers.any(org.bukkit.entity.Entity.class),
+                    org.mockito.ArgumentMatchers.any(Runnable.class))).thenAnswer(call -> {
+                queued.add(call.getArgument(2));
+                return null;
+            });
+            var request = npc.beginMovement();
+            npc.installRoute(request, List.of(new double[]{0.6, 64, 0}), 4);
+            request.result().thenRun(npc::stopWalking);
+            manager.tick();
+            manager.tick();
+            assertTrue(backend.moves.isEmpty());
+            List.copyOf(queued).forEach(Runnable::run);
+        }
+        assertEquals(0.6, npc.x(), 1e-6);
+        assertEquals(0.6, backend.moves.stream().filter(move -> move.entityId() == npc.entityId())
+                .mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+    }
+
+    @Test
+    void arrivalTeleportResetsTheViewerBaselineBeforeFurtherMovement() {
+        NpcImpl npc = manager.create("Teleport", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        var request = npc.beginMovement();
+        npc.installRoute(request, List.of(new double[]{0.2, 64, 0}), 4);
+        request.result().thenRun(() -> npc.teleportTo(new Position("world", 3, 64, 0, 0, 0)));
+        manager.tick();
+        assertTrue(backend.moves.isEmpty());
+        assertEquals(3, backend.shows.getLast().npc().x());
+        npc.walkToward(4, 64, 0, 4);
+        manager.tick();
+        assertEquals(0.4, backend.moves.getLast().dx(), 1e-6);
+    }
+
+    @Test
+    void existingNametagDisplaysMoveForLayoutAndBodyHeightChanges() {
+        NpcImpl npc = manager.create("Layout", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("upper", "lower"));
+        manager.tick();
+        int[] ids = npc.nametagIds();
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.5, 0.75, true));
+        assertEquals(0.72, backend.moves.stream().filter(move -> move.entityId() == ids[0])
+                .mapToDouble(RecordingProtocolBackend.Move::dy).sum(), 1e-6);
+        assertEquals(0.5, backend.moves.stream().filter(move -> move.entityId() == ids[1])
+                .mapToDouble(RecordingProtocolBackend.Move::dy).sum(), 1e-6);
+        backend.moves.clear();
+        npc.pose(NpcPose.SWIMMING);
+        assertEquals(-1.2, backend.moves.getLast().dy(), 1e-6);
+        backend.moves.clear();
+        npc.scale(2);
+        assertEquals(0.6, backend.moves.getLast().dy(), 1e-6);
+        npc.type(EntityType.VILLAGER).pose(NpcPose.STANDING);
+        backend.moves.clear();
+        double before = npc.snapshot().hologram().getLast().y();
+        npc.baby(true);
+        assertEquals(npc.snapshot().hologram().getLast().y() - before, backend.moves.getLast().dy(), 1e-6);
+        backend.moves.clear();
+        npc.appearance(new NpcAppearance(false, false, true, 3, null, true, false));
+        assertFalse(backend.moves.isEmpty());
+    }
+
+    @Test
+    void largeNametagOffsetsRespawnWithoutClampedRelativeMovement() {
+        NpcImpl npc = manager.create("Offset", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("label"));
+        manager.tick();
+        backend.shows.clear();
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.3, 20, true));
+        assertTrue(backend.moves.isEmpty());
+        assertEquals(npc.snapshot().hologram().getFirst().y(), backend.shows.getLast().npc().hologram().getFirst().y());
+        npc.walkToward(1, 64, 0, 4);
+        manager.tick();
+        assertEquals(0.4, backend.moves.getLast().dx(), 1e-6);
+    }
+
 }

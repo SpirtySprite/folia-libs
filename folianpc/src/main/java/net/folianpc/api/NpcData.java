@@ -29,6 +29,15 @@ public record NpcData(UUID id, String name, EntityType type, String world,
 
     @Deprecated(since = "1.2.0")
     public NpcData {
+        new net.folianpc.internal.Position(world == null ? "" : world, x, y, z, yaw, pitch);
+        equipment = equipment == null ? null : net.folianpc.internal.ItemCopies.copy(equipment);
+        nametag = nametag == null ? null : List.copyOf(nametag);
+    }
+
+    /** Returns independent item stacks, so editing equipment cannot mutate this saved snapshot. */
+    @Override
+    public Map<EquipmentSlot, ItemStack> equipment() {
+        return equipment == null ? null : net.folianpc.internal.ItemCopies.copy(equipment);
     }
 
     @Deprecated(since = "1.2.0")
@@ -72,6 +81,12 @@ public record NpcData(UUID id, String name, EntityType type, String world,
     public static @NotNull NpcData deserialize(@NotNull Map<String, ?> map) {
         return NpcDataCodec.fromMap(map, message -> {
         });
+    }
+
+    /** Reads saved data with a report of schema assumptions, ignored fields and fallback values. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public static @NotNull NpcDataReadResult deserializeWithReport(@NotNull Map<String, ?> map) {
+        return NpcDataCodec.fromMapWithReport(map);
     }
 
     public static final class Builder {
@@ -144,7 +159,7 @@ public record NpcData(UUID id, String name, EntityType type, String world,
             if (item == null) {
                 equipment.remove(slot);
             } else {
-                equipment.put(slot, item);
+                equipment.put(slot, item.clone());
             }
             return this;
         }

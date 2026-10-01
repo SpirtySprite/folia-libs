@@ -26,7 +26,7 @@ public final class Schedulers {
         void cancel();
     }
 
-    private static Scheduler scheduler(Plugin plugin) {
+    public static Scheduler scheduler(Plugin plugin) {
         if (synchronousForTesting) {
             return Scheduler.synchronous();
         }

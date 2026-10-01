@@ -28,11 +28,13 @@ final class RecordingProtocolBackend implements ProtocolBackend {
                  java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> equipment) {
     }
 
+    final java.util.Map<org.bukkit.entity.EntityType, net.folianpc.internal.protocol.BodySize> sizes = new java.util.EnumMap<>(org.bukkit.entity.EntityType.class);
     final List<Show> shows = new ArrayList<>();
     final List<Hide> hides = new ArrayList<>();
     final List<Look> looks = new ArrayList<>();
     final List<Move> moves = new ArrayList<>();
     final List<Equip> equips = new ArrayList<>();
+    final List<java.util.Set<org.bukkit.inventory.EquipmentSlot>> equipmentChanges = new ArrayList<>();
     final List<int[]> removed = new ArrayList<>();
     final List<NpcSnapshot> metas = new ArrayList<>();
     final List<Double> scales = new ArrayList<>();
@@ -41,6 +43,11 @@ final class RecordingProtocolBackend implements ProtocolBackend {
 
     private final AtomicInteger ids = new AtomicInteger(1);
     private InteractSink sink;
+
+    @Override
+    public java.util.Optional<net.folianpc.internal.protocol.BodySize> bodySize(org.bukkit.entity.EntityType type) {
+        return java.util.Optional.ofNullable(sizes.get(type));
+    }
 
     @Override
     public int nextEntityId() {
@@ -71,6 +78,14 @@ final class RecordingProtocolBackend implements ProtocolBackend {
     public void equip(Player viewer, int entityId,
                       java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> equipment) {
         equips.add(new Equip(viewer, entityId, equipment));
+    }
+
+    @Override
+    public void equipChanges(Player viewer, int entityId,
+                             java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> items,
+                             java.util.Set<org.bukkit.inventory.EquipmentSlot> changed) {
+        equipmentChanges.add(java.util.Set.copyOf(changed));
+        equip(viewer, entityId, items);
     }
 
     @Override
@@ -111,8 +126,8 @@ final class RecordingProtocolBackend implements ProtocolBackend {
         this.sink = sink;
     }
 
-    void fireInteract(Player viewer, int entityId, ClickType type) {
-        sink.handle(viewer, entityId, type, false);
+    boolean fireInteract(Player viewer, int entityId, ClickType type) {
+        return sink.handle(viewer, entityId, type, false);
     }
 
     void fireInteract(Player viewer, int entityId, ClickType type, boolean sneaking) {

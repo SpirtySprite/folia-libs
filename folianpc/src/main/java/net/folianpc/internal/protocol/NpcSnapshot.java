@@ -20,11 +20,22 @@ public record NpcSnapshot(int entityId, UUID uuid, String name, String profileNa
                           java.util.List<HologramLine> hologram,
                           java.util.Map<Integer, RawMeta> rawMeta) {
 
+    public NpcSnapshot {
+        equipment = net.folianpc.internal.ItemCopies.copy(equipment);
+        hologram = java.util.List.copyOf(hologram);
+        rawMeta = java.util.Map.copyOf(rawMeta);
+    }
+
+    @Override
+    public java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> equipment() {
+        return net.folianpc.internal.ItemCopies.copy(equipment);
+    }
+
     public boolean isPlayer() {
         return type == org.bukkit.entity.EntityType.PLAYER;
     }
 
     public boolean isAgeable() {
-        return Ageable.class.isAssignableFrom(type.getEntityClass());
+        return type.getEntityClass() != null && Ageable.class.isAssignableFrom(type.getEntityClass());
     }
 }

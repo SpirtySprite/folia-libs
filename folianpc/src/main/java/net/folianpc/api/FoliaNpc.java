@@ -169,6 +169,35 @@ public final class FoliaNpc {
         return skins.byId(playerId);
     }
 
+    /** Fetches a named profile with explicit failure category and retry guidance. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public java.util.concurrent.CompletableFuture<SkinFetchResult> fetchSkinResult(String playerName) {
+        return skins.result(skins.byName(playerName));
+    }
+
+    /** Fetches a UUID profile with explicit failure category and retry guidance. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public java.util.concurrent.CompletableFuture<SkinFetchResult> fetchSkinResult(UUID playerId) {
+        return skins.result(skins.byId(playerId));
+    }
+
+    /** Generates a URL skin with explicit failure category and retry guidance. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public java.util.concurrent.CompletableFuture<SkinFetchResult> fetchSkinFromUrlResult(String imageUrl) {
+        return skins.result(skins.byUrl(imageUrl));
+    }
+
+    /**
+     * Bounds entries per lookup cache, active HTTP requests and queued requests. Defaults are 1024, 4 and 256.
+     * Ranges are 1 to 65536 entries, 1 to 64 active requests and 0 to 65536 queued requests.
+     * In-flight entries remain shared; saturation reports BUSY. Safe from any thread.
+     */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public FoliaNpc skinCacheLimits(int entries, int concurrentRequests, int queuedRequests) {
+        skins.limits(entries, concurrentRequests, queuedRequests);
+        return this;
+    }
+
     public FoliaNpc skinCacheTtl(java.time.Duration ttl) {
         skins.ttl(ttl);
         return this;
@@ -195,6 +224,13 @@ public final class FoliaNpc {
     public FoliaNpc placeholderApi(java.util.function.BiFunction<Player, String, String> extra) {
         java.util.function.BiFunction<Player, String, String> standard = Placeholders.standard();
         return placeholders((viewer, text) -> standard.apply(viewer, extra.apply(viewer, text)));
+    }
+
+    /** Loads tolerant saved data, spawns its NPC and returns migration warnings. Duplicate UUIDs remain rejected. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public NpcLoadResult load(java.util.Map<String, ?> saved) {
+        NpcDataReadResult read = NpcData.deserializeWithReport(saved);
+        return new NpcLoadResult(spawn(read.data()), read.warnings());
     }
 
     public Npc spawn(NpcData data) {
@@ -281,6 +317,7 @@ public final class FoliaNpc {
                 .feature("Name plate hiding", c.namePlateHiding(),
                         "the vanilla name plate, glow colour and collision cannot be controlled")
                 .feature("Equipment", c.equipment(), "equipment has no visible effect")
+                .feature("Entity dimensions", backend.dimensionsSupported(), "navigation and nametag sizing use conservative defaults")
                 .feature("Scale", c.scale(), "NPCs always render at scale 1.0")
                 .feature("Rich text", c.richText(), "gradients and hover text fall back to legacy colours")
                 .feature("Baby state", c.baby(), "baby() has no visible effect")

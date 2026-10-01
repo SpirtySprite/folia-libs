@@ -7,6 +7,10 @@ import java.util.UUID;
 
 public interface ProtocolBackend {
 
+    default java.util.Optional<BodySize> bodySize(org.bukkit.entity.EntityType type) {
+        return java.util.Optional.empty();
+    }
+
     int nextEntityId();
 
     void show(Player viewer, NpcSnapshot npc);
@@ -29,6 +33,12 @@ public interface ProtocolBackend {
 
     void equip(Player viewer, int entityId,
                java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> equipment);
+
+    default void equipChanges(Player viewer, int entityId,
+                              java.util.Map<org.bukkit.inventory.EquipmentSlot, org.bukkit.inventory.ItemStack> equipment,
+                              java.util.Set<org.bukkit.inventory.EquipmentSlot> changed) {
+        equip(viewer, entityId, equipment);
+    }
 
     void injectViewer(Player viewer);
 

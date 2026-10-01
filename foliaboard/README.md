@@ -716,3 +716,122 @@ This builds `folia-commons` (which FoliaBoard depends on) and FoliaBoard, runs t
 ships no `plugin.yml`; it is a library you shade into your own plugin.
 
 Add `-Dfoliaboard.debug=true` to the server's JVM arguments to log every scoreboard packet.
+## Presentation updates
+
+The experimental APIs preserve existing builders and interfaces. Builders freeze their configuration
+at `build()`. Later edits configure the next build. Indices are validated from 0 to 63; Minecraft
+shows at most 15 rows, so include headers within that limit on each rotation page.
+
+```java
+Sidebar sidebar = board.createBoard(player)
+    .title(titleAnimation).titleRefreshEvery(3)
+    .line(p -> balances.current(p)).lineRefreshEvery(0, 20).build();
+sidebar.refreshLine(0);
+sidebar.refreshLine(-1);
+sidebar.refresh();
+SidebarState saved = sidebar.snapshot();
+sidebar.replace(new SidebarState(Component.text("Summary"), List.of(
+    new SidebarState.Line(Component.text("Coins"), Optional.of(NumberFormat.blank()))), true));
+sidebar.replace(saved);
+```
+
+`replace` changes desired title, rows, formats and visibility under one lock and queues one diff,
+which can send multiple packets. Snapshots are immutable desired frames. Custom implementations
+inherit a sequential fallback and should override these methods for atomic updates and formats.
+Dynamic title and row callbacks run on the player's owner thread at independent cadences. Failed
+renderers preserve their previous value; failed processors preserve their input and processing
+continues. Failures are logged. Neither callbacks nor resolvers may block for I/O.
+
+```java
+LayoutSection header = new LayoutSection("header", b -> b.title("Account").blankLine());
+LayoutSection money = new LayoutSection("money", b -> b.line(p -> balances.current(p)));
+Layout compact = Layout.sections("compact", List.of(header, money));
+Layout detailed = compact.withSection(new LayoutSection("detail", b -> b.line("Extra details")));
+board.createBoard(player).section(header.andThen(money)).build();
+LayoutScope notice = board.boards().temporaryLayout(player, compact, 100);
+notice.close();
+try (SidebarRotation pages = board.boards().rotate(player, List.of(compact, detailed), 100)) {
+    pages.next();
+    pages.previous();
+    int current = pages.page();
+    int count = pages.pageCount();
+}
+```
+
+Automatic precedence is registered world layout, global layout/provider, then remembered layout.
+Manual builders and `applyLayout` take precedence over automatic selection. Temporary scopes nest
+above that base. Closing the newest scope restores the next scope or reevaluates the base recipe.
+A newer manual selection cancels existing scopes. Closing an older scope cannot overwrite a newer
+one. Rotation uses these same lifetime rules, and shared sections provide headers. LayoutStore
+callbacks run asynchronously; completions are checked against the current selection generation.
+`clearGlobal` clears both provider and layout selection for future joins and leaves manual boards.
+
+Function-backed tab and boss-bar properties refresh every 20 ticks by default. `refreshEvery`
+overrides that cadence. Boss-bar `hideAfter` expires independently, even when the refresh interval
+is longer than its lifetime. Managed tabs with reset enabled restore managed header/footer, name
+and order to their defaults on close.
+
+## Animation playback controls
+
+```java
+AnimationTimeline<Component> timeline = Animations.timeline(Duration.ofMillis(150), frames);
+timeline.pause();
+timeline.seek(Duration.ofSeconds(1));
+timeline.offset(Duration.ofMillis(50));
+otherTimeline.synchronizeWith(timeline);
+timeline.resume();
+Duration position = timeline.elapsed();
+boolean paused = timeline.paused();
+timeline.restart();
+board.createBoard(player).title(timeline).build();
+AnimationTimeline<Long> clocked = new AnimationTimeline<>(nanos -> nanos, System::nanoTime);
+```
+
+Timelines use a monotonic nanosecond clock. Controls are thread-safe. Synchronization copies the
+position and pause state; frame timelines loop. Existing animations remain maintained.
+
+## Bounded caches and scheduled placeholders
+
+```java
+Placeholders placeholders = board.placeholders().cacheLimit(4096);
+placeholders.pruneExpired();
+long failures = placeholders.failures();
+placeholders.componentAsync(Scheduler.forPlugin(this), player, "Coins: %coins%")
+    .thenAccept(component -> consumeRendered(component));
+```
+
+Eviction removes individual entries. Expired placeholder values are removed on access, periodic
+insertion, `cachedValues()` and explicit pruning. There is no background pruning task. Text parsing
+uses a bounded access-order cache. Failed placeholder resolvers fall through to remaining resolvers
+and built-ins; unresolved tokens stay visible. Failure counts appear in `diagnose()`.
+Direct placeholder rendering executes on the caller's thread and requires the player's owner
+thread for player/world access. Use `componentAsync` from arbitrary threads. Completion callbacks
+inherit the completing thread unless explicitly scheduled.
+
+## Cleanup hosts and metrics
+
+```java
+FoliaBoard managed = FoliaBoard.create(ownerPlugin, lifecycleHostPlugin);
+PresentationStats stats = managed.presentationStats();
+PresentationStats.Counters counts = stats.surface(PresentationStats.Surface.SIDEBAR);
+long requested = counts.requests();
+long changed = counts.changedOperations();
+```
+
+An independent host must remain enabled until removals reach all viewers. Its listener closes the
+instance when the owner is disabled, and cleanup runs on each viewer's owner thread. With
+`create(ownerPlugin)`, close while the owner can still schedule work: closing after it is disabled
+cannot submit region cleanup. Simultaneous shutdown requires closing while the host stays enabled.
+No cleanup call blocks a server thread.
+
+Instances have separate objective and team identifiers, including relocated copies under the same
+owner. Closing removes only owned identifiers. Minecraft has one sidebar, one below-name slot and
+one team membership per entry; plugins must coordinate those shared surfaces. Closing does not
+infer another plugin's previous display state. Tab reset restores defaults, so coordinate tab
+ownership as well.
+
+Snapshots provide counters for sidebar, team, objective, tab and boss-bar activity. Requests count
+refresh or mutation attempts. Changed operations count adapter calls or changed Adventure properties
+after filtering and diffing, not per-surface wire packets. The existing `stats().totalPackets()`
+retains its packet-adapter meaning. Retired viewers or refused scheduling may increase requests
+without applying operations.

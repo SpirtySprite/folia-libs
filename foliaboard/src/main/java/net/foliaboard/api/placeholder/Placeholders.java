@@ -1,6 +1,8 @@
 package net.foliaboard.api.placeholder;
 
 import net.foliacommons.text.Legacy;
+import net.foliacommons.time.Deadline;
+import net.foliacommons.scheduler.Scheduler;
 import net.foliaboard.api.text.Text;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -20,6 +22,11 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Thread-safe registrations and bounded caches. Direct rendering runs resolvers on the calling thread;
+ * callers rendering player or world state must use the player's owner thread, or {@link #componentAsync}.
+ * Resolvers must finish promptly and never perform blocking I/O. Built-in board rendering schedules them automatically.
+ */
 public final class Placeholders {
     private static final Pattern TOKEN = Pattern.compile("%([^%\\s]+)%");
     private static final long PAPI_RETRY_MILLIS = 5_000L;
@@ -30,7 +37,7 @@ public final class Placeholders {
     private record CacheKey(UUID player, String key) {
     }
 
-    private record Cached(String value, long expiresAt) {
+    private record Cached(String value, Deadline deadline) {
     }
 
     private final List<PlaceholderResolver> resolvers = new CopyOnWriteArrayList<>();
@@ -40,6 +47,9 @@ public final class Placeholders {
     private volatile long papiCheckedAt = Long.MIN_VALUE;
     private volatile long papiTtlMillis;
     private volatile boolean convertLegacy = true;
+    private volatile int cacheLimit = 4096;
+    private int cacheWrites;
+    private final java.util.concurrent.atomic.LongAdder failures = new java.util.concurrent.atomic.LongAdder();
 
     public Placeholders() {
         detectPapi(System.currentTimeMillis());
@@ -98,7 +108,41 @@ public final class Placeholders {
     }
 
     public int cachedValues() {
+        pruneExpired();
         return cache.size();
+    }
+
+    /** Caps retained cached values, evicting individual entries. Safe from any thread; default is 4096. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public @NotNull Placeholders cacheLimit(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("Cache limit must be positive");
+        }
+        synchronized (cache) {
+            cacheLimit = limit;
+            trimCache();
+        }
+        return this;
+    }
+
+    /** Removes expired values without invoking player-dependent resolvers. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public void pruneExpired() {
+        cache.entrySet().removeIf(entry -> entry.getValue().deadline().expired());
+    }
+
+    /** Number of resolver failures isolated by this instance. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public long failures() {
+        return failures.sum();
+    }
+
+    /** Renders on the player's owner thread. Cancellation and shutdown follow the supplied commons scheduler. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public @NotNull java.util.concurrent.CompletableFuture<Component> componentAsync(
+            @NotNull Scheduler scheduler, @NotNull Player player, @NotNull String template) {
+        java.util.Objects.requireNonNull(template, "template");
+        return java.util.Objects.requireNonNull(scheduler, "scheduler").callForEntity(player, () -> component(player, template));
     }
 
     public @NotNull String apply(@NotNull Player player, @NotNull String text) {
@@ -154,7 +198,13 @@ public final class Placeholders {
             }
         }
         for (PlaceholderResolver resolver : resolvers) {
-            String value = resolver.resolve(player, key);
+            String value;
+            try {
+                value = resolver.resolve(player, key);
+            } catch (RuntimeException failure) {
+                reportFailure(key, failure);
+                continue;
+            }
             if (value != null) {
                 return value;
             }
@@ -173,19 +223,54 @@ public final class Placeholders {
 
     private String cachedOrCompute(Player player, String key, long ttlMillis, java.util.function.Supplier<String> compute) {
         if (ttlMillis <= 0L) {
-            return compute.get();
+            return computeSafely(key, compute);
         }
-        long now = System.currentTimeMillis();
         CacheKey cacheKey = new CacheKey(player.getUniqueId(), key);
         Cached hit = cache.get(cacheKey);
-        if (hit != null && hit.expiresAt() > now) {
+        if (hit != null && !hit.deadline().expired()) {
             return hit.value();
         }
-        String value = compute.get();
+        if (hit != null) {
+            cache.remove(cacheKey, hit);
+        }
+        String value = computeSafely(key, compute);
         if (value != null) {
-            cache.put(cacheKey, new Cached(value, now + ttlMillis));
+            synchronized (cache) {
+                if (++cacheWrites % 64 == 0) {
+                    pruneExpired();
+                }
+                cache.put(cacheKey, new Cached(value, Deadline.after(Duration.ofMillis(
+                        Math.min(ttlMillis, Long.MAX_VALUE / 1_000_000)))));
+                trimCache();
+            }
         }
         return value;
+    }
+
+    private void trimCache() {
+        while (cache.size() > cacheLimit) {
+            var entries = cache.keySet().iterator();
+            if (!entries.hasNext()) {
+                break;
+            }
+            CacheKey eldest = entries.next();
+            cache.remove(eldest);
+        }
+    }
+
+    private String computeSafely(String key, java.util.function.Supplier<String> compute) {
+        try {
+            return compute.get();
+        } catch (RuntimeException failure) {
+            reportFailure(key, failure);
+            return null;
+        }
+    }
+
+    private void reportFailure(String key, RuntimeException failure) {
+        failures.increment();
+        java.util.logging.Logger.getLogger("FoliaBoard").log(java.util.logging.Level.WARNING,
+                "Placeholder resolver failed for " + key + "; using the next resolver or preserving the token", failure);
     }
 
     private static String builtin(Player player, String key) {

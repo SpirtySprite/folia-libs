@@ -40,6 +40,14 @@ public final class SidebarService implements Boards {
     private final Set<UUID> worldLayoutOwned = ConcurrentHashMap.newKeySet();
     private final AtomicInteger objectiveCounter = new AtomicInteger();
 
+    private final Set<UUID> manualPlayers = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Layout> rememberedLayouts = new ConcurrentHashMap<>();
+    private final Map<UUID, Runnable> manualRecipes = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> generations = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong sequence = new java.util.concurrent.atomic.AtomicLong();
+    private final Map<UUID, CopyOnWriteArrayList<Scope>> scopes = new ConcurrentHashMap<>();
+    private final ThreadLocal<Boolean> automatic = ThreadLocal.withInitial(() -> false);
+
     private volatile SidebarProvider globalProvider;
     private volatile Schedulers.ScheduledHandle providerTask;
     private volatile Layout globalLayout;
@@ -62,7 +70,10 @@ public final class SidebarService implements Boards {
         boolean[] created = {false};
         SidebarImpl sidebar = sidebars.computeIfAbsent(player.getUniqueId(), id -> {
             created[0] = true;
-            return new SidebarImpl(runtime.plugin(), runtime.adapter(), player, nextObjectiveId(), lineProcessors);
+            SidebarImpl allocated = new SidebarImpl(runtime.plugin(), runtime.adapter(), player, nextObjectiveId(), lineProcessors);
+            allocated.cleanupPlugin(runtime.cleanupPlugin());
+            allocated.metrics(runtime.metrics());
+            return allocated;
         });
         if (created[0]) {
             Schedulers.onEntity(runtime.plugin(), player,
@@ -82,6 +93,11 @@ public final class SidebarService implements Boards {
         cancelRefresh(id);
         builderOwned.remove(id);
         worldLayoutOwned.remove(id);
+        manualPlayers.remove(id);
+        manualRecipes.remove(id);
+        rememberedLayouts.remove(id);
+        generations.put(id, sequence.incrementAndGet());
+        cancelScopes(id);
         SidebarImpl removed = sidebars.remove(id);
         if (removed != null) {
             removed.close();
@@ -93,7 +109,20 @@ public final class SidebarService implements Boards {
     }
 
     public void markBuilderOwned(@NotNull Player player) {
-        builderOwned.add(player.getUniqueId());
+        UUID id = player.getUniqueId();
+        builderOwned.add(id);
+        if (!automatic.get()) {
+            generations.put(id, sequence.incrementAndGet());
+            manualPlayers.add(id);
+            worldLayoutOwned.remove(id);
+            cancelScopes(id);
+        }
+    }
+
+    public void trackRecipe(Player player, Runnable recipe) {
+        if (!automatic.get()) {
+            manualRecipes.put(player.getUniqueId(), recipe);
+        }
     }
 
     public void trackRefresh(@NotNull Player player, @Nullable Schedulers.ScheduledHandle handle) {
@@ -131,7 +160,7 @@ public final class SidebarService implements Boards {
         clearGlobal();
         this.globalLayout = layout;
         for (Player player : Bukkit.getOnlinePlayers()) {
-            applyLayout(player, layout);
+            Schedulers.onEntity(runtime.plugin(), player, () -> restoreAutomatic(player));
         }
     }
 
@@ -155,12 +184,13 @@ public final class SidebarService implements Boards {
             }
         }, interval, interval);
         for (Player player : Bukkit.getOnlinePlayers()) {
-            Schedulers.onEntity(runtime.plugin(), player, () -> refreshFromProvider(player, provider));
+            Schedulers.onEntity(runtime.plugin(), player, () -> restoreAutomatic(player));
         }
     }
 
     @Override
     public void clearGlobal() {
+        this.globalLayout = null;
         this.globalProvider = null;
         Schedulers.ScheduledHandle task = this.providerTask;
         if (task != null) {
@@ -170,7 +200,7 @@ public final class SidebarService implements Boards {
     }
 
     private void refreshFromProvider(Player player, SidebarProvider provider) {
-        if (runtime.closed() || !player.isOnline()) {
+        if (runtime.closed() || !player.isOnline() || provider != globalProvider) {
             return;
         }
         runtime.metrics().refresh();
@@ -183,9 +213,13 @@ public final class SidebarService implements Boards {
             sidebar.visible(false);
             return;
         }
-        sidebar.visible(true);
-        sidebar.title(provider.title(player));
-        sidebar.lines(provider.lines(player));
+        try {
+            sidebar.replace(new net.foliaboard.api.SidebarState(provider.title(player),
+                    provider.lines(player).stream().map(net.foliaboard.api.SidebarState.Line::new).toList(), true));
+        } catch (RuntimeException failure) {
+            runtime.plugin().getLogger().log(java.util.logging.Level.WARNING,
+                    "Sidebar provider failed; preserving the previous frame", failure);
+        }
     }
 
     @Override
@@ -217,22 +251,226 @@ public final class SidebarService implements Boards {
     @Override
     public @NotNull Sidebar applyLayout(@NotNull Player player, @NotNull Layout layout) {
         runtime.ensureOpen();
+        java.util.Objects.requireNonNull(layout, "layout");
         markBuilderOwned(player);
+        long generation = generations.get(player.getUniqueId());
         Sidebar sidebar = sidebar(player);
         Schedulers.onEntity(runtime.plugin(), player, () -> {
-            LayoutApplyEvent event = new LayoutApplyEvent(player, layout);
-            Bukkit.getPluginManager().callEvent(event);
-            if (!event.isCancelled()) {
-                event.getLayout().applyTo(owner, player);
+            if (current(player, generation)) {
+                renderLayout(player, layout);
                 LayoutStore store = layoutStore;
                 if (store != null) {
                     UUID id = player.getUniqueId();
-                    String name = event.getLayout().name();
-                    Schedulers.async(runtime.plugin(), () -> store.remember(id, name));
+                    String name = layout.name();
+                    Schedulers.async(runtime.plugin(), () -> {
+                        try {
+                            store.remember(id, name).exceptionally(failure -> {
+                                runtime.plugin().getLogger().warning("Could not remember layout: " + failure);
+                                return null;
+                            });
+                        } catch (RuntimeException failure) {
+                            runtime.plugin().getLogger().warning("Could not remember layout: " + failure);
+                        }
+                    });
                 }
             }
         });
         return sidebar;
+    }
+
+    private void renderLayout(Player player, Layout layout) {
+        LayoutApplyEvent event = new LayoutApplyEvent(player, layout);
+        Bukkit.getPluginManager().callEvent(event);
+        if (!event.isCancelled()) {
+            event.getLayout().applyTo(owner, player);
+        }
+    }
+
+    private boolean current(Player player, long generation) {
+        return !runtime.closed() && player.isOnline()
+                && java.util.Objects.equals(generations.get(player.getUniqueId()), generation);
+    }
+
+    private void automatically(Runnable action) {
+        boolean previous = automatic.get();
+        automatic.set(true);
+        try {
+            action.run();
+        } finally {
+            automatic.set(previous);
+        }
+    }
+
+    @Override
+    public net.foliaboard.api.layout.LayoutScope temporaryLayout(Player player, Layout layout) {
+        return createScope(player, layout, false, 0);
+    }
+
+    @Override
+    public net.foliaboard.api.layout.LayoutScope temporaryLayout(Player player, Layout layout, long ticks) {
+        return createScope(player, layout, true, Math.max(1, ticks));
+    }
+
+    private Scope createScope(Player player, Layout layout, boolean timed, long ticks) {
+        runtime.ensureOpen();
+        Scope scope = new Scope(java.util.Objects.requireNonNull(player, "player"),
+                java.util.Objects.requireNonNull(layout, "layout"));
+        generations.put(player.getUniqueId(), sequence.incrementAndGet());
+        scopes.computeIfAbsent(player.getUniqueId(), id -> new CopyOnWriteArrayList<>()).add(scope);
+        Schedulers.onEntity(runtime.plugin(), player, () -> {
+            if (!scope.isCancelled() && !runtime.closed() && player.isOnline()) {
+                List<Scope> active = scopes.get(player.getUniqueId());
+                if (active != null && !active.isEmpty() && active.getLast() == scope) {
+                    automatically(() -> renderLayout(player, scope.layout));
+                }
+            }
+        }, scope::cancelWithoutRestore);
+        if (timed) {
+            scope.lifetime.add(Schedulers.entityLater(runtime.plugin(), player, scope::close, ticks));
+        }
+        return scope;
+    }
+
+    private boolean hasScope(UUID id) {
+        List<Scope> active = scopes.get(id);
+        return active != null && active.stream().anyMatch(scope -> !scope.isCancelled());
+    }
+
+    @Override
+    public net.foliaboard.api.layout.SidebarRotation rotate(Player player, List<Layout> pages, long intervalTicks) {
+        List<Layout> copy = List.copyOf(pages);
+        if (copy.isEmpty() || intervalTicks < 1) {
+            throw new IllegalArgumentException("Rotation needs pages and a positive interval");
+        }
+        Scope scope = createScope(player, copy.getFirst(), false, 0);
+        Rotation rotation = new Rotation(scope, copy);
+        scope.lifetime.add(Schedulers.entityTaskTimer(runtime.plugin(), player, handle -> {
+            if (scope.isCancelled()) {
+                handle.cancel();
+            } else {
+                rotation.next();
+            }
+        }, intervalTicks, intervalTicks));
+        return rotation;
+    }
+
+    private final class Rotation implements net.foliaboard.api.layout.SidebarRotation {
+        private final Scope scope;
+        private final List<Layout> pages;
+        private final AtomicInteger page = new AtomicInteger();
+
+        private Rotation(Scope scope, List<Layout> pages) {
+            this.scope = scope;
+            this.pages = pages;
+        }
+
+        @Override
+        public void next() {
+            select(1);
+        }
+
+        @Override
+        public void previous() {
+            select(-1);
+        }
+
+        private void select(int step) {
+            if (scope.isCancelled()) {
+                return;
+            }
+            int index = page.updateAndGet(current -> Math.floorMod(current + step, pages.size()));
+            scope.layout = pages.get(index);
+            Schedulers.onEntity(runtime.plugin(), scope.player, () -> {
+                List<Scope> active = scopes.get(scope.player.getUniqueId());
+                if (!scope.isCancelled() && active != null && !active.isEmpty() && active.getLast() == scope) {
+                    automatically(() -> renderLayout(scope.player, scope.layout));
+                }
+            });
+        }
+
+        @Override
+        public int page() {
+            return page.get();
+        }
+
+        @Override
+        public int pageCount() {
+            return pages.size();
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return scope.isCancelled();
+        }
+
+        @Override
+        public void close() {
+            scope.close();
+        }
+    }
+
+    private void cancelScopes(UUID id) {
+        List<Scope> active = scopes.remove(id);
+        if (active != null) {
+            active.forEach(Scope::cancelWithoutRestore);
+        }
+    }
+
+    private void restoreBase(Player player) {
+        Runnable manual = manualRecipes.get(player.getUniqueId());
+        if (manual != null) {
+            automatically(manual);
+        } else {
+            restoreAutomatic(player);
+        }
+    }
+
+    private final class Scope implements net.foliaboard.api.layout.LayoutScope {
+        private final Player player;
+        private volatile Layout layout;
+        private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        private final net.foliacommons.scheduler.TaskGroup lifetime = new net.foliacommons.scheduler.TaskGroup();
+
+        private Scope(Player player, Layout layout) {
+            this.player = player;
+            this.layout = layout;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return closed.get();
+        }
+
+        private void cancelWithoutRestore() {
+            closed.set(true);
+            lifetime.cancel();
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            lifetime.cancel();
+            Schedulers.onEntity(runtime.plugin(), player, () -> {
+                List<Scope> active = scopes.get(player.getUniqueId());
+                if (active == null || active.isEmpty()) {
+                    return;
+                }
+                boolean top = active.getLast() == this;
+                active.remove(this);
+                active.removeIf(Scope::isCancelled);
+                if (top && !runtime.closed() && player.isOnline()) {
+                    if (!active.isEmpty()) {
+                        Scope next = active.getLast();
+                        automatically(() -> renderLayout(player, next.layout));
+                    } else {
+                        scopes.remove(player.getUniqueId(), active);
+                        restoreBase(player);
+                    }
+                }
+            });
+        }
     }
 
     @Override
@@ -265,23 +503,38 @@ public final class SidebarService implements Boards {
         return this;
     }
 
-    private boolean applyWorldLayoutIfAny(Player player) {
+    private void restoreAutomatic(Player player) {
         UUID id = player.getUniqueId();
-        String layoutName = worldLayouts.get(player.getWorld().getName());
-        if (layoutName != null) {
-            Layout layout = layout(layoutName);
-            if (layout != null) {
-                applyLayout(player, layout);
-                worldLayoutOwned.add(id);
-                return true;
-            }
-        } else if (worldLayoutOwned.remove(id)) {
-            remove(player);
+        if (runtime.closed() || !player.isOnline() || manualPlayers.contains(id) || hasScope(id)) {
+            return;
         }
-        return false;
+        org.bukkit.World world = player.getWorld();
+        String name = world == null ? null : worldLayouts.get(world.getName());
+        Layout worldLayout = name == null ? null : layout(name);
+        if (worldLayout != null) {
+            worldLayoutOwned.add(id);
+            automatically(() -> renderLayout(player, worldLayout));
+        } else if (globalLayout != null) {
+            worldLayoutOwned.remove(id);
+            automatically(() -> renderLayout(player, globalLayout));
+        } else if (globalProvider != null) {
+            worldLayoutOwned.remove(id);
+            builderOwned.remove(id);
+            refreshFromProvider(player, globalProvider);
+        } else if (rememberedLayouts.containsKey(id)) {
+            worldLayoutOwned.remove(id);
+            automatically(() -> renderLayout(player, rememberedLayouts.get(id)));
+        } else {
+            worldLayoutOwned.remove(id);
+            SidebarImpl sidebar = sidebars.get(id);
+            if (sidebar != null) {
+                sidebar.clearLines().title(net.kyori.adventure.text.Component.empty());
+            }
+            cancelRefresh(id);
+            builderOwned.remove(id);
+        }
     }
 
-    /** First half of a join: start driving the player's sidebar from the global provider, if any. */
     public void onJoinProvider(@NotNull Player player) {
         SidebarProvider provider = globalProvider;
         if (provider != null) {
@@ -289,26 +542,47 @@ public final class SidebarService implements Boards {
         }
     }
 
-    /** Second half of a join: apply the global layout, the world layout, or the remembered layout. */
     public void onJoinLayouts(@NotNull Player player) {
-        Layout global = globalLayout;
-        if (global != null) {
-            applyLayout(player, global);
-        }
-        boolean worldLayoutApplied = applyWorldLayoutIfAny(player);
-
-        LayoutStore store = layoutStore;
-        if (store != null && global == null && !worldLayoutApplied) {
-            store.lastLayout(player.getUniqueId()).thenAccept(name -> {
-                if (name != null && !runtime.closed() && player.isOnline() && layout(name) != null) {
-                    applyLayout(player, name);
-                }
-            });
-        }
+        UUID id = player.getUniqueId();
+        long generation = sequence.incrementAndGet();
+        generations.put(id, generation);
+        Schedulers.onEntity(runtime.plugin(), player, () -> {
+            if (!current(player, generation)) {
+                return;
+            }
+            restoreAutomatic(player);
+            org.bukkit.World world = player.getWorld();
+            boolean worldConfigured = world != null && worldLayouts.containsKey(world.getName());
+            LayoutStore store = layoutStore;
+            if (store != null && globalLayout == null && globalProvider == null && !worldConfigured
+                    && !manualPlayers.contains(id) && !hasScope(id)) {
+                Schedulers.async(runtime.plugin(), () -> {
+                    try {
+                        store.lastLayout(id).whenComplete((name, failure) -> {
+                            if (failure != null) {
+                                runtime.plugin().getLogger().warning("Could not restore layout: " + failure);
+                            } else if (name != null) {
+                                Schedulers.onEntity(runtime.plugin(), player, () -> {
+                                    Layout remembered = layout(name);
+                                    if (current(player, generation) && remembered != null && !manualPlayers.contains(id)
+                                            && !hasScope(id) && globalLayout == null && globalProvider == null) {
+                                        rememberedLayouts.put(id, remembered);
+                                        automatically(() -> renderLayout(player, remembered));
+                                    }
+                                });
+                            }
+                        });
+                    } catch (RuntimeException failure) {
+                        runtime.plugin().getLogger().warning("Could not restore layout: " + failure);
+                    }
+                });
+            }
+        });
     }
 
     public void onWorldChange(@NotNull Player player) {
-        applyWorldLayoutIfAny(player);
+        generations.put(player.getUniqueId(), sequence.incrementAndGet());
+        Schedulers.onEntity(runtime.plugin(), player, () -> restoreAutomatic(player));
     }
 
     public void onQuit(@NotNull Player player) {
@@ -317,6 +591,11 @@ public final class SidebarService implements Boards {
 
     public void closeAll() {
         clearGlobal();
+        scopes.keySet().forEach(this::cancelScopes);
+        manualRecipes.clear();
+        rememberedLayouts.clear();
+        manualPlayers.clear();
+        generations.clear();
         for (Schedulers.ScheduledHandle handle : refreshHandles.values()) {
             handle.cancel();
         }

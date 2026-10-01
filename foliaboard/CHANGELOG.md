@@ -6,6 +6,20 @@ All notable changes to FoliaBoard are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Experimental atomic sidebar frames, independent row refresh, reusable sections, temporary layout
+  scopes, rotating pages, animation timelines and per-surface counters.
+- Optional enabled lifecycle hosts for cleanup after owner disable.
+- Bounded placeholder caches, explicit pruning, failure counters and scheduled component rendering.
+
+### Fixed
+- Preserve viewer scores during shared updates and desired state while objectives are hidden.
+- Clear global layout selection, freeze builders and validate row indices before rendering.
+- Refresh function-backed tabs and boss bars automatically, with independent boss-bar expiry.
+- Reset managed tab order and isolate failed renderers, processors and placeholder resolvers.
+- Prevent stale layout completions from overwriting newer selections and use instance identifiers.
+- Evict individual parsed text entries while preserving recently used values.
+
 ### Changed
 - Text parsing and serialization use shared folia-commons primitives, preserving wrapper behavior and caching.
 

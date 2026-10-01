@@ -15,6 +15,8 @@ public final class NametagService implements Nametags {
     public NametagService(@NotNull BoardRuntime runtime) {
         this.runtime = runtime;
         this.manager = new NametagManager(runtime.plugin(), runtime.adapter(), runtime.namespace());
+        manager.cleanupPlugin(runtime.cleanupPlugin());
+        manager.metrics(runtime.metrics());
     }
 
     @Override

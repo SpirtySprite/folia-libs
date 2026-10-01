@@ -25,8 +25,12 @@ public final class Ids {
         return String.format(Locale.ROOT, "%04x", folded);
     }
 
+    public static String instanceNamespace() {
+        return java.util.UUID.randomUUID().toString().substring(0, 6);
+    }
+
     public static @NotNull String sidebarObjective(@NotNull String namespace, int counter) {
-        return checked("fb" + namespace + Integer.toHexString(counter));
+        return checked("fb" + namespace + Integer.toUnsignedString(counter, 36));
     }
 
     public static @NotNull String belowNameObjective(@NotNull String namespace) {
@@ -38,7 +42,7 @@ public final class Ids {
     }
 
     public static @NotNull String team(@NotNull String namespace, @Nullable Integer sortWeight, int counter) {
-        String unique = namespace + Integer.toHexString(counter);
+        String unique = namespace + Integer.toUnsignedString(counter, 36);
         String name = sortWeight != null
                 ? String.format(Locale.ROOT, "%04d", Math.max(0, Math.min(9999, sortWeight))) + unique
                 : "fbn" + unique;

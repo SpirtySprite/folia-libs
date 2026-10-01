@@ -22,6 +22,8 @@ public final class TabImpl implements TabList {
     }
 
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final Placeholders placeholders;
     private final Player player;
     private final Spec spec;
@@ -35,6 +37,7 @@ public final class TabImpl implements TabList {
 
     public TabImpl(Plugin plugin, Placeholders placeholders, Player player, Spec spec) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.placeholders = placeholders;
         this.player = player;
         this.spec = spec;
@@ -55,6 +58,14 @@ public final class TabImpl implements TabList {
         }
     }
 
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = java.util.Objects.requireNonNull(cleanupPlugin, "cleanupPlugin");
+    }
+
     @Override
     public @NotNull Player player() {
         return player;
@@ -72,6 +83,7 @@ public final class TabImpl implements TabList {
     }
 
     public synchronized void update() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.TAB);
         if (closed) {
             return;
         }
@@ -83,12 +95,14 @@ public final class TabImpl implements TabList {
             sentHeader = header;
             sentFooter = footer;
             updates++;
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
         }
         String name = render(spec.name());
         if (name != null && !name.equals(sentName)) {
             player.playerListName(component(name));
             sentName = name;
             updates++;
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
         }
         if (spec.order() != null) {
             int order = spec.order().applyAsInt(player);
@@ -96,6 +110,7 @@ public final class TabImpl implements TabList {
                 TabOrder.set(player, order);
                 sentOrder = order;
                 updates++;
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.TAB);
             }
         }
     }
@@ -127,12 +142,15 @@ public final class TabImpl implements TabList {
             running.cancel();
         }
         if (spec.resetOnClose() && player.isOnline()) {
-            Schedulers.onEntity(plugin, player, () -> {
+            Schedulers.onEntity(cleanupPlugin, player, () -> {
                 if (sentHeader != null || sentFooter != null) {
                     player.sendPlayerListHeaderAndFooter(Component.empty(), Component.empty());
                 }
                 if (sentName != null) {
                     player.playerListName(null);
+                }
+                if (sentOrder != null) {
+                    TabOrder.set(player, 0);
                 }
             });
         }

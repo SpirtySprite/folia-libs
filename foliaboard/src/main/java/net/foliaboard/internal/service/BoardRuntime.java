@@ -10,6 +10,7 @@ import org.jetbrains.annotations.NotNull;
 /** What every service of one FoliaBoard instance shares. */
 public final class BoardRuntime {
     private final Plugin plugin;
+    private final Plugin cleanupPlugin;
     private final PacketAdapter adapter;
     private final Placeholders placeholders = new Placeholders();
     private final PacketMetrics metrics = new PacketMetrics();
@@ -17,14 +18,23 @@ public final class BoardRuntime {
     private volatile boolean closed;
 
     public BoardRuntime(@NotNull Plugin plugin, @NotNull PacketAdapter adapter) {
+        this(plugin, plugin, adapter);
+    }
+
+    public BoardRuntime(Plugin plugin, Plugin cleanupPlugin, PacketAdapter adapter) {
         this.plugin = plugin;
-        this.adapter = adapter;
-        this.namespace = Ids.namespace(plugin.getName());
+        this.cleanupPlugin = cleanupPlugin;
+        this.adapter = new net.foliaboard.internal.packet.MeteredPacketAdapter(adapter, metrics);
+        this.namespace = Ids.instanceNamespace();
         adapter.attachMetrics(metrics);
     }
 
     public @NotNull Plugin plugin() {
         return plugin;
+    }
+
+    public Plugin cleanupPlugin() {
+        return cleanupPlugin;
     }
 
     public @NotNull PacketAdapter adapter() {

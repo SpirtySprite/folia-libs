@@ -20,6 +20,7 @@ public final class BossBarBuilder {
     private BossBar.Overlay overlay = BossBar.Overlay.PROGRESS;
     private boolean placeholders;
     private int refreshTicks = -1;
+    private boolean dynamic;
     private long lifetimeTicks = -1L;
 
     @ApiStatus.Internal
@@ -29,61 +30,65 @@ public final class BossBarBuilder {
         this.id = id;
     }
 
-    public @NotNull BossBarBuilder text(@NotNull String anyFormat) {
+    public synchronized @NotNull BossBarBuilder text(@NotNull String anyFormat) {
         this.text = viewer -> anyFormat;
         return this;
     }
 
-    public @NotNull BossBarBuilder text(@NotNull Function<Player, String> text) {
+    public synchronized @NotNull BossBarBuilder text(@NotNull Function<Player, String> text) {
+        this.dynamic = true;
         this.text = text;
         return this;
     }
 
-    public @NotNull BossBarBuilder progress(double progress) {
+    public synchronized @NotNull BossBarBuilder progress(double progress) {
         double clamped = clamp(progress);
         this.progress = viewer -> clamped;
         return this;
     }
 
-    public @NotNull BossBarBuilder progress(@NotNull ToDoubleFunction<Player> progress) {
+    public synchronized @NotNull BossBarBuilder progress(@NotNull ToDoubleFunction<Player> progress) {
+        this.dynamic = true;
         this.progress = progress;
         return this;
     }
 
-    public @NotNull BossBarBuilder color(@NotNull BossBar.Color color) {
+    public synchronized @NotNull BossBarBuilder color(@NotNull BossBar.Color color) {
         this.color = viewer -> color;
         return this;
     }
 
-    public @NotNull BossBarBuilder color(@NotNull Function<Player, BossBar.Color> color) {
+    public synchronized @NotNull BossBarBuilder color(@NotNull Function<Player, BossBar.Color> color) {
+        this.dynamic = true;
         this.color = color;
         return this;
     }
 
-    public @NotNull BossBarBuilder overlay(@NotNull BossBar.Overlay overlay) {
+    public synchronized @NotNull BossBarBuilder overlay(@NotNull BossBar.Overlay overlay) {
         this.overlay = overlay;
         return this;
     }
 
-    public @NotNull BossBarBuilder placeholders(boolean enabled) {
+    public synchronized @NotNull BossBarBuilder placeholders(boolean enabled) {
         this.placeholders = enabled;
         return this;
     }
 
-    public @NotNull BossBarBuilder refreshEvery(int ticks) {
+    public synchronized @NotNull BossBarBuilder refreshEvery(int ticks) {
         this.refreshTicks = Math.max(1, ticks);
         return this;
     }
 
-    public @NotNull BossBarBuilder hideAfter(long ticks) {
+    public synchronized @NotNull BossBarBuilder hideAfter(long ticks) {
         this.lifetimeTicks = Math.max(1L, ticks);
         return this;
     }
 
-    public @NotNull ManagedBossBar show() {
+    public synchronized @NotNull ManagedBossBar show() {
         ManagedBossBarImpl bar = new ManagedBossBarImpl(board.runtime().plugin(), board.runtime().placeholders(), player, id,
-                new ManagedBossBarImpl.Spec(text, progress, color, overlay, placeholders, refreshTicks, lifetimeTicks),
+                new ManagedBossBarImpl.Spec(text, progress, color, overlay, placeholders, refreshTicks > 0 ? refreshTicks : dynamic ? 20 : -1, lifetimeTicks),
                 board::forget);
+        bar.cleanupPlugin(board.runtime().cleanupPlugin());
         board.track(player, id, bar);
         bar.start();
         return bar;

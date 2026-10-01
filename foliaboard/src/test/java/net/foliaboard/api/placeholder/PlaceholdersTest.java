@@ -12,6 +12,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlaceholdersTest {
 
+    @Test
+    void boundedCachesAndFailingResolversRemainUsable() {
+        Placeholders placeholders = new Placeholders().cacheLimit(2);
+        placeholders.register("broken", p -> { throw new IllegalStateException("resolver"); });
+        placeholders.register("value", Player::getName, java.time.Duration.ofMinutes(1));
+        for (int i = 0; i < 8; i++) {
+            assertEquals("Steve", placeholders.apply(player(), "%value%"));
+            assertTrue(placeholders.cachedValues() <= 2);
+        }
+        assertEquals("%broken%", placeholders.apply(player(), "%broken%"));
+        assertEquals(1, placeholders.failures());
+        placeholders.pruneExpired();
+        placeholders.cacheLimit(1);
+        assertTrue(placeholders.cachedValues() <= 1);
+    }
+
+    @Test
+    void scheduledComponentsWaitForThePlayerContext() {
+        Placeholders placeholders = new Placeholders().register("value", Player::getName);
+        try (var scheduler = net.foliacommons.scheduler.Scheduler.deterministic()) {
+            var result = placeholders.componentAsync(scheduler, player(), "%value%");
+            assertFalse(result.isDone());
+            scheduler.advanceTicks(1);
+            assertEquals(Component.text("Steve"), result.join());
+        }
+    }
+
     private Player player() {
         Player p = Mockito.mock(Player.class);
         Mockito.when(p.getName()).thenReturn("Steve");

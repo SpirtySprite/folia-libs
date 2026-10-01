@@ -19,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class ScoreObjectiveImpl implements ScoreObjective {
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final PacketAdapter adapter;
     private final String objectiveId;
     private final DisplaySlotType slot;
@@ -29,19 +31,37 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
     private final Map<UUID, Map<String, Integer>> perViewer = new ConcurrentHashMap<>();
     private final Set<UUID> initialisedViewers = ConcurrentHashMap.newKeySet();
     private volatile boolean hidden = false;
+    private volatile boolean closed;
+    private final java.util.concurrent.atomic.AtomicLong visibilityGeneration = new java.util.concurrent.atomic.AtomicLong();
 
     public ScoreObjectiveImpl(Plugin plugin, PacketAdapter adapter, String objectiveId, DisplaySlotType slot) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.adapter = adapter;
         this.objectiveId = objectiveId;
         this.slot = slot;
     }
 
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = java.util.Objects.requireNonNull(cleanupPlugin, "cleanupPlugin");
+    }
+
     @Override
     public @NotNull ScoreObjective title(@NotNull ComponentLike title) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         this.title = title.asComponent();
+        if (hidden || closed) {
+            return this;
+        }
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             Schedulers.onEntity(plugin, viewer, () -> {
+                if (hidden || closed) {
+                    return;
+                }
                 if (initialisedViewers.contains(viewer.getUniqueId())) {
                     adapter.updateObjective(viewer, objectiveId, this.title);
                 } else {
@@ -54,11 +74,13 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public @NotNull ScoreObjective score(@NotNull Player target, int value) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         return score(target.getName(), value);
     }
 
     @Override
     public @NotNull ScoreObjective score(@NotNull String entry, int value) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         Integer previous = scores.put(entry, value);
 
         if (hidden || (previous != null && previous == value)) {
@@ -66,10 +88,13 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
         }
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             Schedulers.onEntity(plugin, viewer, () -> {
+                if (hidden || closed) {
+                    return;
+                }
                 if (!initialisedViewers.contains(viewer.getUniqueId())) {
                     initViewer(viewer);
                 } else {
-                    adapter.setScore(viewer, objectiveId, entry, value, null, null);
+                    sendEntry(viewer, entry);
                 }
             });
         }
@@ -78,25 +103,34 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public @NotNull ScoreObjective remove(@NotNull String entry) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         scores.remove(entry);
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            Schedulers.onEntity(plugin, viewer, () -> adapter.resetScore(viewer, objectiveId, entry));
+            Schedulers.onEntity(plugin, viewer, () -> {
+                if (!hidden && !closed && initialisedViewers.contains(viewer.getUniqueId())) {
+                    sendEntry(viewer, entry);
+                }
+            });
         }
         return this;
     }
 
     @Override
     public @NotNull ScoreObjective scoreFor(@NotNull Player viewer, @NotNull String entry, int value) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         Integer previous = perViewer.computeIfAbsent(viewer.getUniqueId(), k -> new ConcurrentHashMap<>())
                 .put(entry, value);
         if (hidden || (previous != null && previous == value)) {
             return this;
         }
         Schedulers.onEntity(plugin, viewer, () -> {
+            if (hidden || closed) {
+                return;
+            }
             if (!initialisedViewers.contains(viewer.getUniqueId())) {
                 initViewer(viewer);
             } else {
-                adapter.setScore(viewer, objectiveId, entry, value, null, null);
+                sendEntry(viewer, entry);
             }
         });
         return this;
@@ -104,16 +138,18 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public @NotNull ScoreObjective removeFor(@NotNull Player viewer, @NotNull String entry) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         Map<String, Integer> overrides = perViewer.get(viewer.getUniqueId());
         if (overrides != null) {
             overrides.remove(entry);
         }
         Schedulers.onEntity(plugin, viewer, () -> {
-            Integer shared = scores.get(entry);
-            if (shared != null) {
-                adapter.setScore(viewer, objectiveId, entry, shared, null, null);
-            } else {
-                adapter.resetScore(viewer, objectiveId, entry);
+            if (!hidden && !closed) {
+                if (!initialisedViewers.contains(viewer.getUniqueId())) {
+                    initViewer(viewer);
+                } else {
+                    sendEntry(viewer, entry);
+                }
             }
         });
         return this;
@@ -121,9 +157,14 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public void hide() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
         hidden = true;
+        long generation = visibilityGeneration.incrementAndGet();
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            Schedulers.onEntity(plugin, viewer, () -> {
+            Schedulers.onEntity(cleanupPlugin, viewer, () -> {
+                if (visibilityGeneration.get() != generation) {
+                    return;
+                }
                 adapter.removeObjective(viewer, objectiveId);
                 initialisedViewers.remove(viewer.getUniqueId());
             });
@@ -132,12 +173,21 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
 
     @Override
     public void show() {
-        if (!hidden) {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.OBJECTIVE);
+        if (!hidden || closed) {
             return;
         }
         hidden = false;
+        visibilityGeneration.incrementAndGet();
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            Schedulers.onEntity(plugin, viewer, () -> initViewer(viewer));
+            Schedulers.onEntity(plugin, viewer, () -> {
+                if (!hidden && !closed) {
+                    if (initialisedViewers.remove(viewer.getUniqueId())) {
+                        adapter.removeObjective(viewer, objectiveId);
+                    }
+                    initViewer(viewer);
+                }
+            });
         }
     }
 
@@ -168,7 +218,7 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
     }
 
     private void initViewer(Player viewer) {
-        if (hidden || !viewer.isOnline()) {
+        if (hidden || closed || !viewer.isOnline()) {
             return;
         }
 
@@ -189,6 +239,20 @@ public final class ScoreObjectiveImpl implements ScoreObjective {
     }
 
     public void closeAll() {
+        closed = true;
         hide();
+    }
+
+    private void sendEntry(Player viewer, String entry) {
+        Map<String, Integer> overrides = perViewer.get(viewer.getUniqueId());
+        Integer value = overrides == null ? null : overrides.get(entry);
+        if (value == null) {
+            value = scores.get(entry);
+        }
+        if (value == null) {
+            adapter.resetScore(viewer, objectiveId, entry);
+        } else {
+            adapter.setScore(viewer, objectiveId, entry, value, null, null);
+        }
     }
 }

@@ -26,6 +26,8 @@ public final class ObjectiveService implements Objectives {
                 if (belowName == null) {
                     belowName = new ScoreObjectiveImpl(runtime.plugin(), runtime.adapter(),
                             Ids.belowNameObjective(runtime.namespace()), DisplaySlotType.BELOW_NAME);
+                    belowName.cleanupPlugin(runtime.cleanupPlugin());
+                    belowName.metrics(runtime.metrics());
                 }
                 local = belowName;
             }
@@ -42,6 +44,8 @@ public final class ObjectiveService implements Objectives {
                 if (tabList == null) {
                     tabList = new ScoreObjectiveImpl(runtime.plugin(), runtime.adapter(),
                             Ids.tabListObjective(runtime.namespace()), DisplaySlotType.PLAYER_LIST);
+                    tabList.cleanupPlugin(runtime.cleanupPlugin());
+                    tabList.metrics(runtime.metrics());
                 }
                 local = tabList;
             }

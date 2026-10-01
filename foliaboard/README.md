@@ -90,7 +90,7 @@ with **zero locks**, and it's all hidden. You describe *what* to show; FoliaBoar
 	<dependency>
 	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
 	    <artifactId>foliaboard-core</artifactId>
-	    <version>foliaboard-v1.2.0</version>
+	    <version>foliaboard-v1.3.0</version>
 	</dependency>
 ```
 

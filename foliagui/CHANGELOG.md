@@ -6,6 +6,8 @@ All notable changes to FoliaGUI are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-01
+
 ### Added
 - Experimental operation outcomes, per-player menu factories and observable asynchronous content loading.
 - Managed text input with explicit outcomes, native fallback, validators and typed multi-step forms.
@@ -25,6 +27,7 @@ All notable changes to FoliaGUI are documented here. The format follows
 - Resolve inventory view access across the Bukkit class-to-interface change on 1.20.6 and newer servers.
 
 ### Changed
+- Depends on folia-commons 1.1.0 for the shared scheduling, lifecycle and text primitives.
 - Text parsing and serialization use shared folia-commons primitives, preserving null handling and item italic defaults.
 
 ## [1.2.0] - 2026-10-01

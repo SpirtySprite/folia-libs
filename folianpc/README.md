@@ -94,7 +94,7 @@ entities.
 	<dependency>
 	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
 	    <artifactId>folianpc</artifactId>
-	    <version>folianpc-v1.3.0</version>
+	    <version>folianpc-v1.4.0</version>
 	</dependency>
 ```
 

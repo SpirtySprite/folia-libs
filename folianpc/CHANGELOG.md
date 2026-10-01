@@ -6,6 +6,8 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-01
+
 ### Added
 - Managed patrol and follow behavior with waits, distance limits and lifecycle completion.
 - Coherent appearance batches, per-viewer appearance and equipment overrides, and configurable entity-relative nametags.
@@ -27,6 +29,7 @@ All notable changes to FoliaNPC are documented here. The format follows
 - The boolean navigation overload remains supported; the movement task overload also reports arrival and cancellation.
 
 ### Changed
+- Depends on folia-commons 1.1.0 for the shared scheduling, lifecycle and text primitives.
 - Text parsing and serialization use shared folia-commons primitives, preserving empty input and escaping behavior.
 
 ## [1.3.0] - 2026-10-01

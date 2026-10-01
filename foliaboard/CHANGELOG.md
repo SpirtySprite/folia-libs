@@ -6,6 +6,8 @@ All notable changes to FoliaBoard are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-01
+
 ### Added
 - Experimental atomic sidebar frames, independent row refresh, reusable sections, temporary layout
   scopes, rotating pages, animation timelines and per-surface counters.
@@ -24,6 +26,7 @@ All notable changes to FoliaBoard are documented here. The format follows
 - Evict individual parsed text entries while preserving recently used values.
 
 ### Changed
+- Depends on folia-commons 1.1.0 for the shared scheduling, lifecycle and text primitives.
 - Text parsing and serialization use shared folia-commons primitives, preserving wrapper behavior and caching.
 
 ## [1.2.0] - 2026-10-01

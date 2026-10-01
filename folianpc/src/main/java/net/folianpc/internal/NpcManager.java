@@ -1,6 +1,9 @@
 package net.folianpc.internal;
 
 import net.folianpc.api.Emote;
+import net.folianpc.api.MovementResult;
+import net.folianpc.api.NavigationOptions;
+import net.folianpc.internal.pathfinding.TerrainCapture;
 import net.folianpc.api.NpcClickListener;
 import net.folianpc.api.event.NpcInteractEvent;
 import net.folianpc.api.event.NpcRemoveEvent;
@@ -10,6 +13,7 @@ import org.bukkit.event.Event;
 import net.folianpc.internal.geometry.LookAt;
 import net.folianpc.internal.pathfinding.RoutePlanner;
 import net.folianpc.internal.protocol.NpcSnapshot;
+import net.folianpc.internal.protocol.HologramLine;
 import net.folianpc.internal.protocol.ProtocolBackend;
 import net.folianpc.internal.scheduler.Schedulers;
 import org.bukkit.Location;
@@ -36,6 +40,9 @@ public final class NpcManager {
 
     private final ConcurrentHashMap<UUID, NpcImpl> byId = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, NpcImpl> byEntityId = new ConcurrentHashMap<>();
+
+    private final Object lifecycle = new Object();
+    private volatile boolean closed;
 
     private volatile double viewDistance = 48.0;
     private volatile RoutePlanner planner = new RoutePlanner();
@@ -70,6 +77,7 @@ public final class NpcManager {
     }
 
     public void viewDistance(double blocks) {
+        NpcImpl.finite(blocks, "view distance");
         this.viewDistance = Math.max(1.0, blocks);
     }
 
@@ -92,9 +100,20 @@ public final class NpcManager {
     }
 
     public NpcImpl create(UUID id, String name, org.bukkit.entity.EntityType type, Position position) {
-        NpcImpl npc = new NpcImpl(id, backend.nextEntityId(), name, type, position, this);
-        byId.put(npc.id(), npc);
-        byEntityId.put(npc.entityId(), npc);
+        java.util.Objects.requireNonNull(id, "id");
+        java.util.Objects.requireNonNull(position, "position");
+        NpcImpl npc;
+        synchronized (lifecycle) {
+            if (closed) {
+                throw new IllegalStateException("NPC manager is closed");
+            }
+            if (byId.containsKey(id)) {
+                throw new IllegalArgumentException("Duplicate NPC UUID: " + id);
+            }
+            npc = new NpcImpl(id, backend.nextEntityId(), name, type, position, this);
+            byId.put(npc.id(), npc);
+            byEntityId.put(npc.entityId(), npc);
+        }
         events.accept(new NpcSpawnEvent(npc));
         return npc;
     }
@@ -108,8 +127,8 @@ public final class NpcManager {
     }
 
     void unregister(NpcImpl npc) {
-        byId.remove(npc.id());
-        byEntityId.remove(npc.entityId());
+        byId.remove(npc.id(), npc);
+        byEntityId.remove(npc.entityId(), npc);
         for (UUID viewerId : npc.viewers()) {
             PlayerTracker.Tracked t = tracker.get(viewerId);
             if (t != null) {
@@ -226,6 +245,9 @@ public final class NpcManager {
                 }
                 Player viewer = t.player();
                 Schedulers.onEntityLater(plugin, viewer, () -> {
+                    if (closed || npc.removed() || !npc.viewers().contains(viewerId)) {
+                        return;
+                    }
                     backend.look(viewer, entityId, yaw, pitch);
                     if (swingNow) {
                         backend.animate(viewer, entityId, 0);
@@ -245,80 +267,118 @@ public final class NpcManager {
     }
 
     public void reposition(NpcImpl npc) {
-        NpcSnapshot snapshot = npc.snapshot();
-        double range = npc.viewDistance() > 0 ? npc.viewDistance() : viewDistance;
-        double maxDistSq = range * range;
-        int[] lines = npc.nametagIds();
-        for (UUID viewerId : new java.util.ArrayList<>(npc.viewers())) {
-            PlayerTracker.Tracked t = tracker.get(viewerId);
-            if (t == null) {
+        for (UUID viewerId : List.copyOf(npc.viewers())) {
+            PlayerTracker.Tracked tracked = tracker.get(viewerId);
+            if (tracked == null) {
                 npc.viewers().remove(viewerId);
-                continue;
-            }
-            boolean stillVisible = t.world().equals(snapshot.world())
-                    && npc.visibleTo(t.player(), npc.position().distanceSquared(t.x(), t.y(), t.z()) <= maxDistSq);
-            npc.forgetLook(viewerId);
-            Player viewer = t.player();
-            if (stillVisible) {
-                Schedulers.onEntity(plugin, viewer, () -> {
-                    backend.removeEntities(viewer, lines);
-                    backend.hide(viewer, snapshot);
-                    backend.show(viewer, snapshot);
-                });
             } else {
-                npc.viewers().remove(viewerId);
-                Schedulers.onEntity(plugin, viewer, () -> {
-                    backend.hide(viewer, snapshot);
-                    backend.removeEntities(viewer, lines);
-                });
+                Schedulers.onEntity(plugin, tracked.player(), () -> evaluateVisibility(npc, tracked.player(), true));
             }
         }
     }
 
-    public CompletableFuture<Boolean> navigate(NpcImpl npc, Location target, double blocksPerSecond) {
-        CompletableFuture<Boolean> future = new CompletableFuture<>();
-        World world = target.getWorld();
-        if (world == null || !world.getName().equals(npc.position().world())) {
-            future.complete(false);
-            return future;
+    private void evaluateVisibility(NpcImpl npc, Player viewer, boolean reposition) {
+        UUID viewerId = viewer.getUniqueId();
+        if (closed || npc.removed()) {
+            return;
+        }
+        PlayerTracker.Tracked tracked = tracker.get(viewerId);
+        Position pos = npc.position();
+        double range = npc.viewDistance() > 0 ? npc.viewDistance() : viewDistance;
+        if (npc.viewers().contains(viewerId)) {
+            range += npc.visibilityHysteresis();
+        }
+        boolean visible = tracked != null && tracked.player() == viewer && tracked.world().equals(pos.world())
+                && npc.visibleTo(viewer, pos.distanceSquared(tracked.x(), tracked.y(), tracked.z()) <= range * range);
+        if (!visible) {
+            if (npc.viewers().remove(viewerId)) {
+                npc.forgetLook(viewerId);
+                backend.hide(viewer, npc.snapshot());
+                backend.removeEntities(viewer, npc.nametagIds());
+            }
+            return;
+        }
+        boolean show = npc.viewers().add(viewerId);
+        if (show || reposition) {
+            NpcSnapshot snapshot = npc.snapshot();
+            if (reposition) {
+                backend.removeEntities(viewer, npc.nametagIds());
+                backend.hide(viewer, snapshot);
+                npc.forgetLook(viewerId);
+            }
+            backend.show(viewer, snapshot);
+        }
+        if (npc.lookAtPlayers() && !npc.moving()) {
+            LookAt.Rotation look = LookAt.face(pos.x(), pos.y() + Position.EYE_HEIGHT, pos.z(),
+                    tracked.x(), tracked.y() + Position.EYE_HEIGHT, tracked.z());
+            if (npc.lookChanged(viewerId, look.yaw(), look.pitch())) {
+                backend.look(viewer, npc.entityId(), look.yaw(), look.pitch());
+            }
+        }
+    }
+
+    public CompletableFuture<Boolean> navigate(NpcImpl npc, Location target, double speed) {
+        return navigate(npc, target, speed, NavigationOptions.defaults()).route().thenCompose(outcome ->
+                outcome.status() == MovementResult.Status.FAILED
+                        ? CompletableFuture.failedFuture(outcome.failure().orElseThrow())
+                        : CompletableFuture.completedFuture(outcome.status() == MovementResult.Status.ROUTE_FOUND));
+    }
+
+    public MovementRequest navigate(NpcImpl npc, Location target, double speed, NavigationOptions options) {
+        java.util.Objects.requireNonNull(target, "target");
+        java.util.Objects.requireNonNull(options, "options");
+        NpcImpl.finite(speed, "movement speed");
+        Location destination = target.clone();
+        World world = destination.getWorld();
+        new Position(world == null ? "world" : world.getName(), destination.getX(), destination.getY(),
+                destination.getZ(), destination.getYaw(), destination.getPitch());
+        MovementRequest request = npc.beginMovement();
+        if (request.isCancelled()) {
+            return request;
         }
         Position from = npc.position();
-        Location npcLocation = new Location(world, from.x(), from.y(), from.z());
-        Schedulers.onRegion(plugin, npcLocation, () -> {
-            List<double[]> route = planner.route(world, from.x(), from.y(), from.z(),
-                    target.getX(), target.getY(), target.getZ());
-            if (route.isEmpty()) {
-                future.complete(false);
-            } else {
-                npc.followRoute(route, blocksPerSecond);
-                future.complete(true);
-            }
-        });
-        return future;
+        double[] dimensions = npc.dimensions(options);
+        if (world == null || !world.getName().equals(from.world()) || dimensions[0] > 16 || dimensions[1] > 32
+                || Math.abs(destination.getX() - from.x()) > options.radius()
+                || Math.abs(destination.getZ() - from.z()) > options.radius()) {
+            npc.cancelMovement(request, MovementResult.Status.UNREACHABLE);
+            return request;
+        }
+        try {
+            var capture = new TerrainCapture(Schedulers.scheduler(plugin)).capture(world, from.x(), from.z(),
+                    options.radius(), options.terrain());
+            request.work.add(capture);
+            var search = capture.thenApplyAsync(sampler -> planner.route(sampler, from.x(), from.y(), from.z(),
+                    destination.getX(), destination.getY(), destination.getZ(), options, dimensions[0], dimensions[1]), async);
+            request.work.add(search);
+            search.whenComplete((route, failure) -> {
+                if (failure != null) {
+                    npc.completeMovement(request, MovementResult.failed(failure));
+                } else if (route.isEmpty()) {
+                    npc.cancelMovement(request, MovementResult.Status.UNREACHABLE);
+                } else {
+                    npc.installRoute(request, route, speed);
+                }
+            });
+        } catch (RuntimeException failure) {
+            npc.completeMovement(request, MovementResult.failed(failure));
+        }
+        return request;
     }
 
-    private void walkStep(NpcImpl npc, double[] delta) {
-        int entityId = npc.entityId();
-        int[] lines = npc.nametagIds();
-        float yaw = npc.position().yaw();
-        float pitch = npc.position().pitch();
-        for (UUID viewerId : npc.viewers()) {
-            PlayerTracker.Tracked t = tracker.get(viewerId);
-            if (t == null) {
-                continue;
+    private void walkStep(NpcImpl npc, double[] delta, long generation) {
+        forEachViewer(npc, (viewer, snapshot) -> {
+            if (npc.movementGeneration() != generation) {
+                return;
             }
-            Player viewer = t.player();
-            if (!deliverable(viewer)) {
-                continue;
+            backend.move(viewer, snapshot.entityId(), delta[0], delta[1], delta[2]);
+            for (HologramLine line : snapshot.hologram()) {
+                backend.move(viewer, line.entityId(), delta[0], delta[1], delta[2]);
             }
-            backend.move(viewer, entityId, delta[0], delta[1], delta[2]);
-            for (int lineId : lines) {
-                backend.move(viewer, lineId, delta[0], delta[1], delta[2]);
+            if (npc.lookChanged(viewer.getUniqueId(), snapshot.yaw(), snapshot.pitch())) {
+                backend.look(viewer, snapshot.entityId(), snapshot.yaw(), snapshot.pitch());
             }
-            if (npc.lookChanged(viewerId, yaw, pitch)) {
-                backend.look(viewer, entityId, yaw, pitch);
-            }
-        }
+        });
     }
 
     public void dropPlayer(UUID playerId) {
@@ -329,12 +389,15 @@ public final class NpcManager {
     }
 
     private void forEachViewer(NpcImpl npc, BiConsumer<Player, NpcSnapshot> action) {
-        NpcSnapshot snapshot = npc.snapshot();
         for (UUID viewerId : npc.viewers()) {
             PlayerTracker.Tracked tracked = tracker.get(viewerId);
             if (tracked != null) {
                 Player viewer = tracked.player();
-                Schedulers.onEntity(plugin, viewer, () -> action.accept(viewer, snapshot));
+                Schedulers.onEntity(plugin, viewer, () -> {
+                    if (!closed && !npc.removed() && npc.viewers().contains(viewerId)) {
+                        action.accept(viewer, npc.snapshot());
+                    }
+                });
             }
         }
     }
@@ -344,6 +407,9 @@ public final class NpcManager {
     private final Set<UUID> forcedHandled = new HashSet<>();
 
     public void tick() {
+        if (closed) {
+            return;
+        }
         long start = System.nanoTime();
         playersByWorld.clear();
         for (PlayerTracker.Tracked t : tracker.all()) {
@@ -374,9 +440,10 @@ public final class NpcManager {
 
     private void tick(NpcImpl npc) {
         if (npc.moving()) {
+            long generation = npc.movementGeneration();
             double[] delta = npc.stepWalk(SECONDS_PER_PASS);
             if (delta != null) {
-                walkStep(npc, delta);
+                walkStep(npc, delta, generation);
             }
         }
         if (npc.dueForNametagRefresh()) {
@@ -384,9 +451,7 @@ public final class NpcManager {
         }
         Position pos = npc.position();
         double range = npc.viewDistance() > 0 ? npc.viewDistance() : viewDistance;
-        double maxDistSq = range * range;
-        double eyeY = pos.y() + Position.EYE_HEIGHT;
-        NpcSnapshot snapshot = null;
+        range += npc.visibilityHysteresis();
         shouldSee.clear();
         boolean trackProximity = npc.hasProximityListeners();
         if (trackProximity) {
@@ -395,8 +460,6 @@ public final class NpcManager {
 
         double proxRadius = trackProximity ? npc.proximityRadius() : 0.0;
         double proxSq = proxRadius * proxRadius;
-        // Only players close enough to matter are examined: the ones within view distance (or the proximity
-        // radius), plus any player this NPC was forced visible to, who is shown from any distance.
         scratch.clear();
         List<PlayerTracker.Tracked> candidates = List.of();
         PlayerGrid sameWorld = playersByWorld.get(pos.world());
@@ -425,38 +488,8 @@ public final class NpcManager {
             if (trackProximity && distSq <= proxSq) {
                 nearNow.add(t.uuid());
             }
-            if (!npc.visibleTo(t.player(), distSq <= maxDistSq)) {
-                continue;
-            }
             shouldSee.add(t.uuid());
-            Player viewer = t.player();
-            boolean shown = npc.viewers().add(t.uuid());
-
-            LookAt.Rotation look = null;
-            if (npc.lookAtPlayers() && !npc.moving()) {
-                LookAt.Rotation r = LookAt.face(pos.x(), eyeY, pos.z(),
-                        t.x(), t.y() + Position.EYE_HEIGHT, t.z());
-                if (npc.lookChanged(t.uuid(), r.yaw(), r.pitch())) {
-                    look = r;
-                }
-            }
-            int entityId = npc.entityId();
-            if (shown) {
-                if (snapshot == null) {
-                    snapshot = npc.snapshot();
-                }
-                NpcSnapshot spawn = snapshot;
-                LookAt.Rotation facing = look;
-                Schedulers.onEntity(plugin, viewer, () -> {
-                    backend.show(viewer, spawn);
-                    if (facing != null) {
-                        backend.look(viewer, entityId, facing.yaw(), facing.pitch());
-                    }
-                });
-                log("shown '" + npc.name() + "' (id=" + npc.entityId() + ") to " + viewer.getName());
-            } else if (look != null && deliverable(viewer)) {
-                backend.look(viewer, entityId, look.yaw(), look.pitch());
-            }
+            Schedulers.onEntity(plugin, t.player(), () -> evaluateVisibility(npc, t.player(), false));
         }
 
         for (Iterator<UUID> it = npc.viewers().iterator(); it.hasNext(); ) {
@@ -478,11 +511,6 @@ public final class NpcManager {
         }
     }
 
-    private boolean deliverable(Player viewer) {
-        return Schedulers.synchronousForTesting()
-                || plugin != null && plugin.isEnabled() && viewer.isOnline();
-    }
-
     private void firePresence(NpcImpl npc, UUID playerId, java.util.function.BiConsumer<net.folianpc.api.Npc, Player> callback) {
         if (callback == null) {
             return;
@@ -492,7 +520,11 @@ public final class NpcManager {
             return;
         }
         Player viewer = t.player();
-        Schedulers.onEntity(plugin, viewer, () -> guard(npc, () -> callback.accept(npc, viewer)));
+        Schedulers.onEntity(plugin, viewer, () -> {
+            if (!closed && !npc.removed()) {
+                guard(npc, () -> callback.accept(npc, viewer));
+            }
+        });
     }
 
     private static final double MAX_INTERACT_DISTANCE_SQUARED = 10.0 * 10.0;
@@ -504,11 +536,9 @@ public final class NpcManager {
             return false;
         }
         PlayerTracker.Tracked t = tracker.get(viewer.getUniqueId());
-        if (t != null && (!t.world().equals(npc.position().world())
-                || npc.position().distanceSquared(t.x(), t.y(), t.z()) > MAX_INTERACT_DISTANCE_SQUARED)) {
-            return true;
-        }
-        if (!npc.allowInteract(viewer.getUniqueId(), clock.getAsLong())) {
+        if (closed || npc.removed() || t == null || !npc.viewers().contains(viewer.getUniqueId())
+                || !t.world().equals(npc.position().world())
+                || npc.position().distanceSquared(t.x(), t.y(), t.z()) > MAX_INTERACT_DISTANCE_SQUARED) {
             return true;
         }
         Schedulers.onEntity(plugin, viewer, () -> interact(viewer, npc, type, sneaking));
@@ -516,6 +546,15 @@ public final class NpcManager {
     }
 
     private void interact(Player viewer, NpcImpl npc, net.folianpc.api.ClickType type, boolean sneaking) {
+        UUID viewerId = viewer.getUniqueId();
+        PlayerTracker.Tracked tracked = tracker.get(viewerId);
+        Position pos = npc.position();
+        if (closed || npc.removed() || byEntityId.get(npc.entityId()) != npc || tracked == null
+                || !npc.viewers().contains(viewerId) || !tracked.world().equals(pos.world())
+                || pos.distanceSquared(tracked.x(), tracked.y(), tracked.z()) > MAX_INTERACT_DISTANCE_SQUARED
+                || !npc.visibleTo(viewer, true) || !npc.allowInteract(viewerId, clock.getAsLong())) {
+            return;
+        }
         NpcInteractEvent event = new NpcInteractEvent(viewer, npc, type, sneaking);
         events.accept(event);
         if (event.isCancelled()) {
@@ -550,15 +589,30 @@ public final class NpcManager {
                 return;
             }
             Schedulers.onEntityLater(plugin, viewer, () -> {
-                if (!ctx.remainingCancelled()) {
+                if (!closed && !npc.removed() && !ctx.remainingCancelled()) {
                     guard(npc, () -> entry.action().run(ctx));
                 }
             }, entry.delayTicks());
         }
     }
 
+    public boolean closed() {
+        return closed;
+    }
+
     public void close() {
-        for (NpcImpl npc : byId.values()) {
+        List<NpcImpl> ending;
+        synchronized (lifecycle) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            ending = List.copyOf(byId.values());
+            byId.clear();
+            byEntityId.clear();
+        }
+        for (NpcImpl npc : ending) {
+            npc.markRemoved();
             NpcSnapshot snapshot = npc.snapshot();
             int[] lineIds = npc.nametagIds();
             for (UUID viewerId : npc.viewers()) {
@@ -569,8 +623,6 @@ public final class NpcManager {
             }
             npc.viewers().clear();
         }
-        byId.clear();
-        byEntityId.clear();
     }
 
     private void hideNow(Player viewer, NpcSnapshot snapshot, int[] lineIds) {

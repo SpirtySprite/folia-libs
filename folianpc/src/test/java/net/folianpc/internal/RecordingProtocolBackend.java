@@ -111,8 +111,8 @@ final class RecordingProtocolBackend implements ProtocolBackend {
         this.sink = sink;
     }
 
-    void fireInteract(Player viewer, int entityId, ClickType type) {
-        sink.handle(viewer, entityId, type, false);
+    boolean fireInteract(Player viewer, int entityId, ClickType type) {
+        return sink.handle(viewer, entityId, type, false);
     }
 
     void fireInteract(Player viewer, int entityId, ClickType type, boolean sneaking) {

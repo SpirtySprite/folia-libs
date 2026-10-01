@@ -14,6 +14,16 @@ public interface Npc {
 
     double viewDistance();
 
+    /** Adds a nonnegative hide margin after a viewer enters range, reducing repeated show and hide packets. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default Npc visibilityHysteresis(double blocks) {
+        throw new UnsupportedOperationException("Visibility hysteresis is unavailable in this implementation");
+    }
+
+    /** Returns the additional hide distance in blocks, initially zero. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default double visibilityHysteresis() { return 0; }
+
     org.bukkit.entity.EntityType type();
 
     Npc type(org.bukkit.entity.EntityType type);
@@ -180,7 +190,22 @@ public interface Npc {
 
     Npc walkTo(org.bukkit.Location target, double blocksPerSecond);
 
+    /**
+     * Finds a route and starts walking. True means a route was installed, not that the NPC arrived.
+     * @deprecated Use {@link #navigateTo(org.bukkit.Location, double, NavigationOptions)} to observe arrival and cancellation.
+     */
+    @Deprecated
     java.util.concurrent.CompletableFuture<Boolean> navigateTo(org.bukkit.Location target, double blocksPerSecond);
+
+    /**
+     * Captures terrain on its owning regions and searches asynchronously. A newer movement request,
+     * teleport, stop, removal or service shutdown completes this task with its corresponding outcome.
+     * Safe from any thread; caller mutations to the target are not retained.
+     */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default MovementTask navigateTo(org.bukkit.Location target, double blocksPerSecond, NavigationOptions options) {
+        throw new UnsupportedOperationException("Snapshot navigation is unavailable in this implementation");
+    }
 
     Npc stopWalking();
 

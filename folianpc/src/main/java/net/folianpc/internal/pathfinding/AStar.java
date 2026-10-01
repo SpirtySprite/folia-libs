@@ -15,9 +15,14 @@ public final class AStar {
 
     public interface WorldSampler {
         boolean solid(int x, int y, int z);
+        default boolean passable(int x, int y, int z) { return !solid(x, y, z); }
+        default boolean ground(int x, int y, int z) { return solid(x, y, z); }
     }
 
     public record Node(int x, int y, int z) {
+    }
+
+    private record Open(Node node, double priority) {
     }
 
     private static final int[][] DIRECTIONS = {
@@ -25,25 +30,29 @@ public final class AStar {
             {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
     };
 
-    private static final int MAX_STEP_UP = 1;
-    private static final int MAX_STEP_DOWN = 3;
-
     private AStar() {
     }
 
     public static List<Node> find(WorldSampler world, Node start, Node goal, int maxNodes, int maxRadius) {
+        return find(world, start, goal, new net.folianpc.api.NavigationOptions(maxNodes, Math.min(128, maxRadius), 1, 3,
+                net.folianpc.api.NavigationOptions.TerrainPolicy.SOLID_GROUND, 0.6, 1.8, false), 0.6, 1.8);
+    }
+
+    public static List<Node> find(WorldSampler world, Node start, Node goal,
+                                  net.folianpc.api.NavigationOptions options, double width, double height) {
+        int maxNodes = options.maxNodes();
+        int maxRadius = options.radius();
         Map<Node, Node> cameFrom = new HashMap<>();
         Map<Node, Double> gScore = new HashMap<>();
         Set<Node> closed = new HashSet<>();
-        PriorityQueue<Node> open = new PriorityQueue<>(
-                Comparator.comparingDouble(n -> score(gScore, n) + heuristic(n, goal)));
+        PriorityQueue<Open> open = new PriorityQueue<>(Comparator.comparingDouble(Open::priority));
 
         gScore.put(start, 0.0);
-        open.add(start);
+        open.add(new Open(start, heuristic(start, goal)));
         int explored = 0;
 
         while (!open.isEmpty() && explored < maxNodes) {
-            Node current = open.poll();
+            Node current = open.poll().node();
             if (!closed.add(current)) {
                 continue;
             }
@@ -52,7 +61,7 @@ public final class AStar {
             }
             explored++;
 
-            for (Node neighbor : neighbors(world, current)) {
+            for (Node neighbor : neighbors(world, current, options, width, height)) {
                 if (closed.contains(neighbor)
                         || Math.abs(neighbor.x() - start.x()) > maxRadius
                         || Math.abs(neighbor.z() - start.z()) > maxRadius) {
@@ -62,7 +71,7 @@ public final class AStar {
                 if (tentative < score(gScore, neighbor)) {
                     cameFrom.put(neighbor, current);
                     gScore.put(neighbor, tentative);
-                    open.add(neighbor);
+                    open.add(new Open(neighbor, tentative + heuristic(neighbor, goal)));
                 }
             }
         }
@@ -96,10 +105,10 @@ public final class AStar {
         return horizontal + Math.abs(to.y() - from.y()) * 0.5;
     }
 
-    private static List<Node> neighbors(WorldSampler world, Node from) {
+    private static List<Node> neighbors(WorldSampler world, Node from, net.folianpc.api.NavigationOptions options, double width, double height) {
         List<Node> result = new ArrayList<>(8);
         for (int[] dir : DIRECTIONS) {
-            Node landing = landingSpot(world, from, dir[0], dir[1]);
+            Node landing = landingSpot(world, from, dir[0], dir[1], options, width, height);
             if (landing != null) {
                 result.add(landing);
             }
@@ -107,28 +116,47 @@ public final class AStar {
         return result;
     }
 
-    private static Node landingSpot(WorldSampler world, Node from, int dx, int dz) {
+    private static Node landingSpot(WorldSampler world, Node from, int dx, int dz, net.folianpc.api.NavigationOptions options, double width, double height) {
         boolean diagonal = dx != 0 && dz != 0;
-        if (diagonal && !openCorner(world, from, dx, dz)) {
+        if (diagonal && !openCorner(world, from, dx, dz, width, height)) {
             return null;
         }
-        for (int dy = MAX_STEP_UP; dy >= -MAX_STEP_DOWN; dy--) {
+        for (int dy = options.stepHeight(); dy >= -options.maxDrop(); dy--) {
             Node candidate = new Node(from.x() + dx, from.y() + dy, from.z() + dz);
-            if (standable(world, candidate)) {
+            if (clearance(world, candidate.x() + 0.5, candidate.y(), candidate.z() + 0.5, width, height)) {
                 return candidate;
             }
         }
         return null;
     }
 
-    private static boolean openCorner(WorldSampler world, Node from, int dx, int dz) {
-        return !world.solid(from.x() + dx, from.y(), from.z()) && !world.solid(from.x() + dx, from.y() + 1, from.z())
-                && !world.solid(from.x(), from.y(), from.z() + dz) && !world.solid(from.x(), from.y() + 1, from.z() + dz);
+    private static boolean openCorner(WorldSampler world, Node from, int dx, int dz, double width, double height) {
+        return bodyClear(world, from.x() + dx + 0.5, from.y(), from.z() + 0.5, width, height)
+                && bodyClear(world, from.x() + 0.5, from.y(), from.z() + dz + 0.5, width, height);
     }
 
-    private static boolean standable(WorldSampler world, Node n) {
-        return world.solid(n.x(), n.y() - 1, n.z())
-                && !world.solid(n.x(), n.y(), n.z())
-                && !world.solid(n.x(), n.y() + 1, n.z());
+    public static boolean clearance(WorldSampler world, double x, double y, double z, double width, double height) {
+        int floorY = (int) Math.floor(y) - 1;
+        for (int xx = (int) Math.floor(x - width / 2); xx <= (int) Math.floor(x + width / 2 - 1e-7); xx++) {
+            for (int zz = (int) Math.floor(z - width / 2); zz <= (int) Math.floor(z + width / 2 - 1e-7); zz++) {
+                if (!world.ground(xx, floorY, zz)) {
+                    return false;
+                }
+            }
+        }
+        return bodyClear(world, x, y, z, width, height);
+    }
+
+    private static boolean bodyClear(WorldSampler world, double x, double y, double z, double width, double height) {
+        for (int xx = (int) Math.floor(x - width / 2); xx <= (int) Math.floor(x + width / 2 - 1e-7); xx++) {
+            for (int zz = (int) Math.floor(z - width / 2); zz <= (int) Math.floor(z + width / 2 - 1e-7); zz++) {
+                for (int yy = (int) Math.floor(y); yy <= (int) Math.floor(y + height - 1e-7); yy++) {
+                    if (!world.passable(xx, yy, zz)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 }

@@ -6,6 +6,19 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Snapshot-based navigation with bounded search options, clearance dimensions, ground following and observable movement outcomes.
+- Visibility hysteresis for existing viewers.
+
+### Fixed
+- Pending navigation completes on cancellation, replacement, removal, shutdown and search failure.
+- Visibility predicates and viewer updates run on player ownership threads; hidden and stale clicks are rejected.
+- Duplicate UUIDs and creation after shutdown are rejected; equipment and position snapshots are independent and coherent.
+- Nonfinite coordinates, speed, scale, view distance and proximity inputs are rejected.
+
+### Deprecated
+- The boolean navigation overload remains supported; the movement task overload also reports arrival and cancellation.
+
 ### Changed
 - Text parsing and serialization use shared folia-commons primitives, preserving empty input and escaping behavior.
 

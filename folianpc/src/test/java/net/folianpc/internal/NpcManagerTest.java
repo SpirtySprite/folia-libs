@@ -271,6 +271,8 @@ class NpcManagerTest {
             clickType.set(type);
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertSame(npc, clicked.get());
@@ -485,6 +487,8 @@ class NpcManagerTest {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         NpcInteractEvent event = firstEvent(NpcInteractEvent.class);
@@ -508,6 +512,8 @@ class NpcManagerTest {
             }
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertTrue(ran.isEmpty(), "a cancelled interaction must run nothing");
@@ -523,6 +529,8 @@ class NpcManagerTest {
         });
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("action"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("action"), ran);
@@ -758,6 +766,19 @@ class NpcManagerTest {
         assertEquals(0.2, npc.x(), 1e-6);
     }
 
+    private void snapshots(World world, boolean sealed) {
+        org.bukkit.Chunk chunk = mock(org.bukkit.Chunk.class);
+        org.bukkit.ChunkSnapshot snapshot = mock(org.bukkit.ChunkSnapshot.class);
+        org.bukkit.Material solid = mock(org.bukkit.Material.class);
+        org.bukkit.Material air = mock(org.bukkit.Material.class);
+        when(solid.isSolid()).thenReturn(true);
+        when(snapshot.getBlockType(anyInt(), anyInt(), anyInt())).thenAnswer(inv ->
+                sealed || (int) inv.getArgument(1) <= 0 ? solid : air);
+        when(chunk.getChunkSnapshot(false, false, false)).thenReturn(snapshot);
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.completedFuture(chunk));
+    }
+
     private World flatWorld(String name) {
         World world = mock(World.class);
         when(world.getName()).thenReturn(name);
@@ -769,6 +790,7 @@ class NpcManagerTest {
         when(air.isSolid()).thenReturn(false);
         when(world.getBlockAt(anyInt(), anyInt(), anyInt())).thenAnswer(inv ->
                 ((int) inv.getArgument(1)) <= 0 ? solid : air);
+        snapshots(world, false);
         return world;
     }
 
@@ -780,6 +802,7 @@ class NpcManagerTest {
         Block solid = mock(Block.class);
         when(solid.isSolid()).thenReturn(true);
         when(world.getBlockAt(anyInt(), anyInt(), anyInt())).thenReturn(solid);
+        snapshots(world, true);
         return world;
     }
 
@@ -834,6 +857,8 @@ class NpcManagerTest {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT, true);
 
         assertTrue(firstEvent(NpcInteractEvent.class).isSneaking());
@@ -1017,6 +1042,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("second"));
         npc.addAction(ClickType.LEFT, ctx -> ran.add("left"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("first", "second"), ran);
@@ -1030,6 +1057,8 @@ class NpcManagerTest {
         npc.onClick((who, clicked, type) -> ran.add("listener"));
         npc.addAction(ClickType.LEFT, ctx -> ran.add("action"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.LEFT);
 
         assertEquals(List.of("listener", "action"), ran);
@@ -1045,6 +1074,8 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
         now.set(1_400L);
@@ -1066,8 +1097,13 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
-        backend.fireInteract(player(UUID.randomUUID()), npc.entityId(), ClickType.RIGHT);
-        backend.fireInteract(player(UUID.randomUUID()), npc.entityId(), ClickType.RIGHT);
+        Player a = player(UUID.randomUUID());
+        Player b = player(UUID.randomUUID());
+        track(a, "world", 0, 64, 5);
+        track(b, "world", 0, 64, 5);
+        manager.tick();
+        backend.fireInteract(a, npc.entityId(), ClickType.RIGHT);
+        backend.fireInteract(b, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(2, runs.get(), "one player's cooldown must not block another");
     }
@@ -1081,6 +1117,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, NpcClickContext::cancelRemaining);
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("never"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("first"), ran);
@@ -1097,6 +1135,8 @@ class NpcManagerTest {
             assertEquals(7, ctx.data().get("hits"));
         });
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.LEFT);
 
         assertEquals(ClickType.LEFT, seen.get());
@@ -1112,6 +1152,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, blocked);
         npc.addAction(ClickType.RIGHT, chained);
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("a", "b"), ran);
@@ -1127,6 +1169,8 @@ class NpcManagerTest {
         });
         npc.addAction(ClickType.RIGHT, ctx -> ran.add("still runs"));
 
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(List.of("still runs"), ran);
@@ -1140,6 +1184,8 @@ class NpcManagerTest {
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
         npc.clearActions(ClickType.RIGHT);
+        track(p, npc.world(), npc.x(), npc.y(), npc.z());
+        manager.tick();
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
         assertEquals(0, runs.get());
@@ -1394,6 +1440,8 @@ class NpcManagerTest {
         assertTrue(copy.showInTabList());
 
         Player p = player(UUID.randomUUID());
+        track(p, copy.world(), copy.x(), copy.y(), copy.z());
+        manager.tick();
         backend.fireInteract(p, ((NpcImpl) copy).entityId(), ClickType.RIGHT);
         assertEquals(List.of("original-action"), ran, "the copy keeps the original's actions");
     }
@@ -1419,6 +1467,7 @@ class NpcManagerTest {
         AtomicInteger runs = new AtomicInteger();
         npc.addAction(ClickType.RIGHT, ctx -> runs.incrementAndGet());
 
+        manager.tick();
         backend.fireInteract(far, npc.entityId(), ClickType.RIGHT);
         assertEquals(0, runs.get(), "a forged click from a known-distant tracked position must not run");
 
@@ -1427,7 +1476,7 @@ class NpcManagerTest {
     }
 
     @Test
-    void untrackedClicksStillRunSincePositionIsUnknownRatherThanWrong() {
+    void untrackedClicksAreRejected() {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         Player p = player(UUID.randomUUID());
         AtomicInteger runs = new AtomicInteger();
@@ -1435,7 +1484,7 @@ class NpcManagerTest {
 
         backend.fireInteract(p, npc.entityId(), ClickType.RIGHT);
 
-        assertEquals(1, runs.get());
+        assertEquals(0, runs.get());
     }
 
     @Test
@@ -1540,4 +1589,146 @@ class NpcManagerTest {
 
         assertEquals(NametagStyle.defaults(), legacy.nametagStyle());
     }
+    @Test
+    void duplicateIdsAndCreationAfterCloseAreRejected() {
+        UUID id = UUID.randomUUID();
+        Position position = new Position("world", 0, 1, 0, 0, 0);
+        NpcImpl original = manager.create(id, "original", org.bukkit.entity.EntityType.PLAYER, position);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> manager.create(id, "replacement", org.bukkit.entity.EntityType.PLAYER, position));
+        assertSame(original, manager.get(id));
+        manager.close();
+        assertTrue(original.removed());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> original.glowing(true));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> manager.create("late", position));
+    }
+
+    @Test
+    void snapshotNavigationReportsSetupThenArrival() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        var task = npc.navigateTo(new Location(flatWorld("world"), 3.5, 1, 0.5), 10,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.ROUTE_FOUND, task.route().join().status());
+        assertFalse(task.result().isDone());
+        for (int pass = 0; pass < 20; pass++) {
+            manager.tick();
+        }
+        assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, task.result().join().status());
+        assertEquals(3.5, npc.x());
+    }
+
+    @Test
+    void cancellationSupersessionRemovalAndShutdownCompletePendingCapture() {
+        for (int ending = 0; ending < 4; ending++) {
+            NpcManager local = new NpcManager(mock(Plugin.class), new RecordingProtocolBackend(), new PlayerTracker());
+            local.events(event -> { });
+            NpcImpl npc = local.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+            World world = flatWorld("world");
+            CompletableFuture<org.bukkit.Chunk> pending = new CompletableFuture<>();
+            when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false))).thenReturn(pending);
+            var task = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4,
+                    net.folianpc.api.NavigationOptions.builder().radius(8).build());
+            switch (ending) {
+                case 0 -> task.cancel();
+                case 1 -> npc.teleport(new Location(world, 20, 1, 0));
+                case 2 -> npc.remove();
+                default -> local.close();
+            }
+            var expected = List.of(net.folianpc.api.MovementResult.Status.CANCELLED,
+                    net.folianpc.api.MovementResult.Status.SUPERSEDED,
+                    net.folianpc.api.MovementResult.Status.REMOVED,
+                    net.folianpc.api.MovementResult.Status.SHUTDOWN).get(ending);
+            assertEquals(expected, task.route().join().status());
+            assertEquals(expected, task.result().join().status());
+            pending.complete(mock(org.bukkit.Chunk.class));
+            assertFalse(npc.moving());
+            local.close();
+        }
+    }
+
+    @Test
+    void failedTerrainCaptureAndRejectedExecutorFinishNavigation() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("load failed")));
+        var failed = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.FAILED, failed.result().join().status());
+        manager.async(task -> { throw new java.util.concurrent.RejectedExecutionException(); });
+        var rejected = npc.navigateTo(new Location(flatWorld("world"), 3.5, 1, 0.5), 4,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.FAILED, rejected.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    private org.bukkit.inventory.ItemStack mutableItem(int amount) {
+        var value = new AtomicInteger(amount);
+        var item = mock(org.bukkit.inventory.ItemStack.class);
+        var material = mock(org.bukkit.Material.class);
+        when(item.getType()).thenReturn(material);
+        when(item.getAmount()).thenAnswer(inv -> value.get());
+        org.mockito.Mockito.doAnswer(inv -> { value.set(inv.getArgument(0)); return null; }).when(item).setAmount(anyInt());
+        when(item.clone()).thenAnswer(inv -> mutableItem(value.get()));
+        return item;
+    }
+
+    @Test
+    void finiteInputsAndIndependentEquipmentSnapshotsAreEnforced() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> npc.scale(Double.NaN));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> npc.viewDistance(Double.POSITIVE_INFINITY));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> npc.walkTo(new Location(null, Double.NaN, 64, 0), 4));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> npc.walkTo(new Location(null, 0, 64, 0), Double.NaN));
+        org.bukkit.inventory.ItemStack item = mutableItem(2);
+        npc.equipment(org.bukkit.inventory.EquipmentSlot.HAND, item);
+        item.setAmount(9);
+        var data = npc.data();
+        var snapshot = npc.snapshot();
+        npc.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(8);
+        data.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(7);
+        snapshot.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).setAmount(6);
+        assertEquals(2, npc.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+        assertEquals(2, data.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+        assertEquals(2, snapshot.equipment().get(org.bukkit.inventory.EquipmentSlot.HAND).getAmount());
+    }
+
+    @Test
+    void hiddenAndStaleEntityClicksAreRejected() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        AtomicInteger clicks = new AtomicInteger();
+        npc.onClick((player, target, type) -> clicks.incrementAndGet());
+        npc.visibleWhen(player -> false);
+        manager.tick();
+        assertTrue(backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT));
+        assertEquals(0, clicks.get());
+        npc.visibleWhen(player -> true);
+        manager.tick();
+        backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT);
+        assertEquals(1, clicks.get());
+        npc.remove();
+        assertFalse(backend.fireInteract(viewer, npc.entityId(), ClickType.RIGHT));
+        assertEquals(1, clicks.get());
+    }
+
+    @Test
+    void hysteresisKeepsExistingViewerWithinHideMargin() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        npc.viewDistance(10).visibilityHysteresis(2);
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 9, 64, 0);
+        manager.tick();
+        assertTrue(npc.viewers().contains(viewer.getUniqueId()));
+        track(viewer, "world", 11, 64, 0);
+        manager.tick();
+        assertTrue(npc.viewers().contains(viewer.getUniqueId()));
+        track(viewer, "world", 13, 64, 0);
+        manager.tick();
+        assertFalse(npc.viewers().contains(viewer.getUniqueId()));
+    }
+
 }

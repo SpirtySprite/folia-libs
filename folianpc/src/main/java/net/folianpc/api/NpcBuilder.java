@@ -42,6 +42,8 @@ public final class NpcBuilder {
     }
 
     public NpcBuilder location(Location location) {
+        java.util.Objects.requireNonNull(location, "location");
+        new net.folianpc.internal.Position("", location.getX(), location.getY(), location.getZ(), location.getYaw(), location.getPitch());
         this.world = location.getWorld() != null ? location.getWorld().getName() : "world";
         this.x = location.getX();
         this.y = location.getY();
@@ -92,7 +94,11 @@ public final class NpcBuilder {
     }
 
     public NpcBuilder equipment(org.bukkit.inventory.EquipmentSlot slot, org.bukkit.inventory.ItemStack item) {
-        this.equipment.put(slot, item);
+        if (item == null) {
+            this.equipment.remove(slot);
+        } else {
+            this.equipment.put(slot, item.clone());
+        }
         return this;
     }
 
@@ -192,6 +198,9 @@ public final class NpcBuilder {
     }
 
     public NpcBuilder viewDistance(double blocks) {
+        if (!Double.isFinite(blocks)) {
+            throw new IllegalArgumentException("view distance must be finite");
+        }
         this.viewDistance = blocks;
         return this;
     }

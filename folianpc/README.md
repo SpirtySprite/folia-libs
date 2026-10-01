@@ -183,7 +183,40 @@ npc.remove();         // despawns for everyone and unregisters; the handle must 
 Renaming re-sends the NPC (a full despawn/respawn for every current viewer), because the name is
 embedded in the tab-list profile the client received at spawn time and can't be patched afterwards.
 
-### Visibility range
+#### Observable navigation
+
+```java
+NavigationOptions options = NavigationOptions.builder()
+        .maxNodes(8000).radius(48).stepHeight(1).maxDrop(2)
+        .groundFollowing(true).build();
+MovementTask travel = npc.navigateTo(destination, 4.0, options);
+travel.route().thenAccept(setup -> plugin.getLogger().info(setup.status().name()));
+travel.result().thenAccept(outcome -> plugin.getLogger().info(outcome.status().name()));
+travel.cancel();
+npc.visibilityHysteresis(3.0);
+```
+
+`route()` distinguishes route installation from failure; `result()` observes arrival, cancellation,
+replacement, removal or shutdown. Cancelling an observer future does not cancel travel; cancel the
+`MovementTask` itself. The previous two-argument `navigateTo` remains available but is deprecated:
+its boolean reports route installation only. `walkTo` continues to use straight-line movement.
+
+Searches use immutable snapshots captured on each chunk's owning region and do not read live blocks
+from an asynchronous search. Missing chunks are treated as blocked and are not generated. Budgets
+are bounded to 100000 nodes and a radius of 128 blocks. Terrain policy, rise, drop and optional
+clearance dimensions are configurable. Zero dimensions derive clearance from type, pose, baby state
+and scale. Ground following adjusts the destination's landing height within the rise and drop limits;
+it does not add gravity or live collision handling after a route is installed.
+
+Coordinates, rotations, speed, scale, view distance and proximity radii must be finite. Equipment
+inputs and getters, saved data and packet snapshots are copied independently. A duplicate persisted
+UUID is rejected; remove the existing NPC explicitly before replacing it. A closed service rejects
+creation and marks its existing handles removed. Mutating a removed handle throws `IllegalStateException`.
+Visibility predicates execute on each viewer's owning thread. Only tracked players currently shown
+an NPC can interact with it, and stale entity IDs do not invoke handlers. Hysteresis defaults to zero;
+a positive margin extends the hide range only after a player has entered the normal view range.
+
+## Visibility range
 
 An NPC is shown to players within range (48 blocks by default) in the *same world* and hidden again the
 moment they leave, either by walking away or by changing worlds. You do not manage this yourself — the

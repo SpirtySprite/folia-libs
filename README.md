@@ -42,6 +42,14 @@ The libraries are published through [JitPack](https://jitpack.io). Use the group
 | FoliaNPC | `folianpc` |
 | folia-commons | `folia-commons` |
 
+JitPack builds normalize the module groups to the parent Maven group before installation so
+published dependencies point to the Commons artifact under the same JitPack version. This runs
+only in JitPack's disposable checkout through `scripts/jitpack-prepare.sh`. Normal Maven builds
+retain the libraries' original group IDs. Do not run the preparation script in a working checkout
+whose original Maven coordinates you want to preserve. Test preparation with
+`python3 scripts/test-jitpack-prepare.py`; it uses a temporary checkout and verifies that other
+POM metadata and the source files remain unchanged.
+
 Each library's README has the details, including the `plugin.yml` setting Folia needs
 (`folia-supported: true`).
 

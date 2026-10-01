@@ -6,6 +6,9 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- JitPack publication resolves shared module dependencies under the same release version.
+
 ## [1.4.0] - 2026-10-01
 
 ### Added

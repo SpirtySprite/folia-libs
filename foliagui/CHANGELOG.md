@@ -6,6 +6,9 @@ All notable changes to FoliaGUI are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- JitPack publication resolves shared module dependencies under the same release version.
+
 ## [1.3.0] - 2026-10-01
 
 ### Added

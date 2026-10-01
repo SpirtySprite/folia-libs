@@ -5,6 +5,7 @@ import org.jetbrains.annotations.NotNull;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
+import java.util.Objects;
 
 /**
  * Reads a library's own version from a small properties resource that the build fills in.
@@ -24,6 +25,8 @@ public final class LibraryVersion {
      * @return the {@code version} property, or {@value #UNKNOWN} if the resource is missing or unreadable
      */
     public static @NotNull String read(@NotNull Class<?> anchor, @NotNull String resourceName) {
+        Objects.requireNonNull(anchor, "anchor");
+        Objects.requireNonNull(resourceName, "resourceName");
         try (InputStream in = anchor.getResourceAsStream(resourceName)) {
             if (in == null) {
                 return UNKNOWN;
@@ -31,7 +34,6 @@ public final class LibraryVersion {
             Properties properties = new Properties();
             properties.load(in);
             String version = properties.getProperty("version", UNKNOWN).trim();
-            // An unfiltered build leaves the placeholder in place.
             return version.isEmpty() || version.startsWith("${") ? UNKNOWN : version;
         } catch (IOException | IllegalArgumentException unreadable) {
             return UNKNOWN;

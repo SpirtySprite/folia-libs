@@ -4,6 +4,8 @@ import org.bukkit.Bukkit;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The Minecraft version of the running server.
@@ -12,6 +14,7 @@ import java.util.Objects;
  * version every {@code 1.x} feature check passes, because the release is newer than all of them.
  */
 public final class ServerVersion implements Comparable<ServerVersion> {
+    private static final Pattern VERSION = Pattern.compile("([0-9]+)(?:\\.([0-9]+))?(?:\\.([0-9]+))?(?:-.*)?");
     private final int major;
     private final int minor;
     private final int patch;
@@ -35,28 +38,31 @@ public final class ServerVersion implements Comparable<ServerVersion> {
 
     /**
      * Reads strings like {@code 1.21.4}, {@code 1.21.4-R0.1-SNAPSHOT} or {@code 26.1}. Parts that are
-     * missing or not numeric count as zero.
+     * missing count as zero. Unrecognized or overflowing strings return {@code 0.0.0}, which never
+     * passes a feature check.
      */
     public static @NotNull ServerVersion parse(@NotNull String raw) {
         Objects.requireNonNull(raw, "raw");
-        String cleaned = raw.split("-")[0].trim();
-        String[] parts = cleaned.split("\\.");
-        return new ServerVersion(part(parts, 0), part(parts, 1), part(parts, 2));
+        Matcher matcher = VERSION.matcher(raw.trim());
+        if (!matcher.matches()) {
+            return new ServerVersion(0, 0, 0);
+        }
+        try {
+            return new ServerVersion(part(matcher.group(1)), part(matcher.group(2)), part(matcher.group(3)));
+        } catch (NumberFormatException overflow) {
+            return new ServerVersion(0, 0, 0);
+        }
     }
 
     public static @NotNull ServerVersion of(int major, int minor, int patch) {
+        if (major < 0 || minor < 0 || patch < 0) {
+            throw new IllegalArgumentException("Version components must be non-negative");
+        }
         return new ServerVersion(major, minor, patch);
     }
 
-    private static int part(String[] parts, int index) {
-        if (index >= parts.length) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(parts[index].replaceAll("[^0-9]", ""));
-        } catch (NumberFormatException notANumber) {
-            return 0;
-        }
+    private static int part(String value) {
+        return value == null ? 0 : Integer.parseInt(value);
     }
 
     public int major() {
@@ -73,13 +79,16 @@ public final class ServerVersion implements Comparable<ServerVersion> {
 
     /** True for the calendar-style numbering that replaced {@code 1.x.y}. */
     public boolean isCalendarScheme() {
-        return major != 1;
+        return major >= 26;
     }
 
     /** True if this is Minecraft 1.{@code minor}.{@code patch} or newer. Calendar versions always qualify. */
     public boolean isAtLeast(int minor, int patch) {
         if (isCalendarScheme()) {
             return true;
+        }
+        if (major != 1) {
+            return false;
         }
         if (this.minor != minor) {
             return this.minor > minor;

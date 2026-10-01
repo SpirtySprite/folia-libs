@@ -1,10 +1,7 @@
 package com.foliagui.util;
 
-import net.foliacommons.text.Legacy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
-import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -15,10 +12,6 @@ import java.util.stream.Collectors;
 
 public final class Text {
 
-    private static final LegacyComponentSerializer AMPERSAND = LegacyComponentSerializer.legacyAmpersand();
-    private static final LegacyComponentSerializer SECTION = LegacyComponentSerializer.legacySection();
-    private static final MiniMessage MINI = MiniMessage.miniMessage();
-
     private Text() {
     }
 
@@ -27,7 +20,7 @@ public final class Text {
         if (miniMessage == null) {
             return null;
         }
-        return MINI.deserialize(miniMessage).decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE);
+        return net.foliacommons.text.Text.mini(miniMessage).decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE);
     }
 
     public static @NotNull List<Component> miniList(@NotNull List<String> lines) {
@@ -39,7 +32,8 @@ public final class Text {
         if (legacy == null) {
             return null;
         }
-        Component parsed = legacy.indexOf('§') >= 0 ? SECTION.deserialize(legacy) : AMPERSAND.deserialize(legacy);
+        Component parsed = legacy.indexOf('§') >= 0 ? net.foliacommons.text.Text.legacySection(legacy)
+                : net.foliacommons.text.Text.legacyAmpersand(legacy);
         return parsed.decoration(TextDecoration.ITALIC, parsed.hasDecoration(TextDecoration.ITALIC));
     }
 
@@ -48,7 +42,8 @@ public final class Text {
         if (legacy == null) {
             return null;
         }
-        Component parsed = legacy.indexOf('§') >= 0 ? SECTION.deserialize(legacy) : AMPERSAND.deserialize(legacy);
+        Component parsed = legacy.indexOf('§') >= 0 ? net.foliacommons.text.Text.legacySection(legacy)
+                : net.foliacommons.text.Text.legacyAmpersand(legacy);
         return parsed.decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE);
     }
 
@@ -57,7 +52,7 @@ public final class Text {
         if (anyFormat == null) {
             return null;
         }
-        return MINI.deserialize(Legacy.toMini(anyFormat))
+        return net.foliacommons.text.Text.parse(anyFormat)
                 .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE);
     }
 
@@ -66,15 +61,15 @@ public final class Text {
     }
 
     public static @NotNull String plain(@NotNull Component component) {
-        return net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(component);
+        return net.foliacommons.text.Text.plain(component);
     }
 
     public static @NotNull String escape(@NotNull String value) {
-        return MINI.escapeTags(value);
+        return net.foliacommons.text.Text.escapeTags(value);
     }
 
     public static @NotNull String toLegacy(@NotNull Component component) {
-        return SECTION.serialize(component);
+        return net.foliacommons.text.Text.toLegacy(component);
     }
 
     public static @NotNull Component of(@NotNull String template, @NotNull Map<String, String> placeholders) {

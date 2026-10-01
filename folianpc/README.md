@@ -420,6 +420,9 @@ whether the underlying team subsystem bound at all on this server.
 
 ### Text formatting
 
+Parsing and serialization use `net.foliacommons.text.Text`. The NPC wrapper keeps
+null or empty parsed input as an empty component and null escaped input as an empty string.
+
 Text accepts MiniMessage and legacy codes (`&a`, `§a`, `&#rrggbb`, `§x§r§r§g§g§b§b`) in the same string,
 so `&6Gold <bold>and bold` works as expected. This applies everywhere text is accepted (nametag lines,
 `Actions.message`, `Actions.title`, `Actions.actionBar`). `Text.escape(...)` neutralises tags in untrusted

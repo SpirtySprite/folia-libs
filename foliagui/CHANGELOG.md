@@ -6,6 +6,9 @@ All notable changes to FoliaGUI are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Text parsing and serialization use shared folia-commons primitives, preserving null handling and item italic defaults.
+
 ## [1.2.0] - 2026-10-01
 
 ### Fixed

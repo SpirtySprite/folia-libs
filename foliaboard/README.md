@@ -526,6 +526,9 @@ already do that for you.
 
 `Text` is the one-stop helper.
 
+Parsing and serialization use `net.foliacommons.text.Text`. The wrapper retains its
+component cache and escaping of all opening tag delimiters and backslashes.
+
 ```java
 Component c   = Text.mini("<rainbow>hello</rainbow>");
 Component tag = Text.mini("<hover:show_text:'<green>Click!'><click:run_command:/spawn>Spawn</click>");

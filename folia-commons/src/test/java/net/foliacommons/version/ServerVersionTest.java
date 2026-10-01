@@ -9,6 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ServerVersionTest {
 
     @Test
+    void malformedAndUnknownVersionsNeverEnableFeatures() {
+        for (String raw : new String[]{"", "garbage", "0.99.99", "1.foo.99", "1.21oops.4",
+                "99999999999999999999.1", "2.1", "1.21.4.5"}) {
+            ServerVersion version = ServerVersion.parse(raw);
+            assertFalse(version.isCalendarScheme(), raw);
+            assertFalse(version.isAtLeast(20, 6), raw);
+        }
+        assertEquals(ServerVersion.of(1, 21, 4), ServerVersion.parse(" 1.21.4-R0.1-SNAPSHOT "));
+    }
+
+    @Test
     void parsesPlainAndSnapshotStrings() {
         ServerVersion plain = ServerVersion.parse("1.21.4");
         assertEquals(21, plain.minor());

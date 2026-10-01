@@ -771,6 +771,10 @@ above that base. Closing the newest scope restores the next scope or reevaluates
 A newer manual selection cancels existing scopes. Closing an older scope cannot overwrite a newer
 one. Rotation uses these same lifetime rules, and shared sections provide headers. LayoutStore
 callbacks run asynchronously; completions are checked against the current selection generation.
+Manual layout persistence uses the layout accepted by `LayoutApplyEvent`; cancelled applications
+do not write to the store. Disconnecting releases the generation entry, and rejoining assigns a
+fresh generation. When automatic selection has no fallback, clearing the sidebar also removes its
+refresh callback, so explicit refresh cannot restore the discarded layout.
 `clearGlobal` clears both provider and layout selection for future joins and leaves manual boards.
 
 Function-backed tab and boss-bar properties refresh every 20 ticks by default. `refreshEvery`
@@ -838,7 +842,8 @@ infer another plugin's previous display state. Tab reset restores defaults, so c
 ownership as well.
 
 Snapshots provide counters for sidebar, team, objective, tab and boss-bar activity. Requests count
-refresh or mutation attempts. Changed operations count adapter calls or changed Adventure properties
+refresh or mutation attempts, including managed tab and boss-bar initial rendering, refresh and
+cleanup. Changed operations count adapter calls or changed Adventure properties
 after filtering and diffing, not per-surface wire packets. The existing `stats().totalPackets()`
 retains its packet-adapter meaning. Retired viewers or refused scheduling may increase requests
 without applying operations.

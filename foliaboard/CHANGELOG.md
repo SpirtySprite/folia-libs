@@ -13,6 +13,9 @@ All notable changes to FoliaBoard are documented here. The format follows
 - Bounded placeholder caches, explicit pruning, failure counters and scheduled component rendering.
 
 ### Fixed
+- Persist only accepted layout event results and skip persistence for cancelled applications.
+- Include managed tab and boss-bar rendering and cleanup in shared presentation metrics.
+- Clear discarded automatic refresh callbacks and release player generations on disconnect.
 - Preserve viewer scores during shared updates and desired state while objectives are hidden.
 - Clear global layout selection, freeze builders and validate row indices before rendering.
 - Refresh function-backed tabs and boss bars automatically, with independent boss-bar expiry.

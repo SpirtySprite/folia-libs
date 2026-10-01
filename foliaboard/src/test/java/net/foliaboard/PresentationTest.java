@@ -2,6 +2,7 @@ package net.foliaboard;
 
 import net.foliaboard.api.BoardBuilder;
 import net.foliaboard.api.LayoutStore;
+import net.foliaboard.api.event.LayoutApplyEvent;
 import net.foliaboard.api.ManagedBossBar;
 import net.foliaboard.api.ScoreObjective;
 import net.foliaboard.api.Sidebar;
@@ -45,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -223,6 +225,123 @@ class PresentationTest {
         verify(player).sendPlayerListHeaderAndFooter(Component.empty(), Component.empty());
         verify(player).playerListName(null);
         assertEquals(0, board.stats().activeSidebars());
+    }
+
+    @Test
+    void cancelledLayoutsDoNotRenderOrPersist() {
+        LayoutStore store = mock(LayoutStore.class);
+        board.boards().layoutStore(store);
+        Sidebar sidebar = board.createBoard(player).title("Existing").build();
+        scheduler.advanceTicks(3);
+        PluginManager manager = Bukkit.getPluginManager();
+        doAnswer(invocation -> {
+            if (invocation.getArgument(0) instanceof LayoutApplyEvent event) {
+                event.setCancelled(true);
+            }
+            return null;
+        }).when(manager).callEvent(any());
+        board.boards().applyLayout(player, Layout.named("cancelled", b -> b.title("Cancelled")));
+        scheduler.advanceTicks(5);
+        assertEquals(Component.text("Existing"), sidebar.title());
+        verify(store, never()).remember(any(), any());
+    }
+
+    @Test
+    void replacementLayoutsPersistTheAcceptedName() {
+        LayoutStore store = mock(LayoutStore.class);
+        when(store.remember(any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+        board.boards().layoutStore(store);
+        Layout replacement = Layout.named("accepted", b -> b.title("Accepted"));
+        PluginManager manager = Bukkit.getPluginManager();
+        doAnswer(invocation -> {
+            if (invocation.getArgument(0) instanceof LayoutApplyEvent event) {
+                event.setLayout(replacement);
+            }
+            return null;
+        }).when(manager).callEvent(any());
+        board.boards().applyLayout(player, Layout.named("requested", b -> b.title("Requested")));
+        scheduler.advanceTicks(5);
+        assertEquals(Component.text("Accepted"), board.sidebar(player).title());
+        verify(store).remember(player.getUniqueId(), "accepted");
+        verify(store, never()).remember(player.getUniqueId(), "requested");
+    }
+
+    @Test
+    void discardedWorldLayoutsCannotBeRestoredByExplicitRefresh() {
+        AtomicInteger renders = new AtomicInteger();
+        board.boards().registerLayout(Layout.named("world", b -> b.title(p -> "World " + renders.incrementAndGet())))
+                .worldLayout("world", "world");
+        board.lifecycle().onJoin(player);
+        scheduler.advanceTicks(4);
+        Sidebar sidebar = board.sidebar(player);
+        assertEquals(Component.text("World 1"), sidebar.title());
+        board.boards().clearWorldLayout("world");
+        board.lifecycle().onWorldChange(player);
+        scheduler.advanceTicks(4);
+        int before = renders.get();
+        sidebar.refresh();
+        sidebar.refreshLine(0);
+        scheduler.advanceTicks(45);
+        assertEquals(Component.empty(), sidebar.title());
+        assertEquals(List.of(), sidebar.lines());
+        assertEquals(before, renders.get());
+    }
+
+    @Test
+    void disconnectedPlayersReleaseGenerationsAndRejectOldResultsAfterRejoin() throws Exception {
+        CompletableFuture<String> oldResult = new CompletableFuture<>();
+        CompletableFuture<String> newResult = new CompletableFuture<>();
+        LayoutStore store = mock(LayoutStore.class);
+        when(store.lastLayout(player.getUniqueId())).thenReturn(oldResult).thenReturn(newResult);
+        board.boards().registerLayout(Layout.named("old", b -> b.title("Old")))
+                .registerLayout(Layout.named("new", b -> b.title("New"))).layoutStore(store);
+        board.lifecycle().onJoin(player);
+        scheduler.advanceTicks(3);
+        var field = board.boards().getClass().getDeclaredField("generations");
+        field.setAccessible(true);
+        java.util.Map<?, ?> generations = (java.util.Map<?, ?>) field.get(board.boards());
+        Object previous = generations.get(player.getUniqueId());
+        assertTrue(previous != null);
+        board.lifecycle().onQuit(player);
+        assertFalse(generations.containsKey(player.getUniqueId()));
+        oldResult.complete("old");
+        board.lifecycle().onJoin(player);
+        scheduler.advanceTicks(4);
+        org.junit.jupiter.api.Assertions.assertNotEquals(previous, generations.get(player.getUniqueId()));
+        assertEquals(null, board.boards().sidebarIfPresent(player));
+        newResult.complete("new");
+        scheduler.advanceTicks(4);
+        assertEquals(Component.text("New"), board.sidebar(player).title());
+        board.lifecycle().onQuit(player);
+        assertTrue(generations.isEmpty());
+    }
+
+    @Test
+    void managedTabAndBossActivityUsesSharedPresentationMetrics() {
+        var tab = board.tab(player).header("Header").build();
+        ManagedBossBar boss = board.bossBar(player, "metrics").text("Boss").show();
+        scheduler.advanceTicks(3);
+        PresentationStats initial = board.presentationStats();
+        assertTrue(initial.surface(PresentationStats.Surface.TAB).requests() > 0);
+        assertTrue(initial.surface(PresentationStats.Surface.TAB).changedOperations() > 0);
+        assertTrue(initial.surface(PresentationStats.Surface.BOSS_BAR).requests() > 0);
+        assertTrue(initial.surface(PresentationStats.Surface.BOSS_BAR).changedOperations() > 0);
+        tab.refresh();
+        boss.refresh();
+        scheduler.advanceTicks(3);
+        PresentationStats refreshed = board.presentationStats();
+        for (PresentationStats.Surface surface : List.of(PresentationStats.Surface.TAB, PresentationStats.Surface.BOSS_BAR)) {
+            assertTrue(refreshed.surface(surface).requests() > initial.surface(surface).requests());
+            assertEquals(initial.surface(surface).changedOperations(), refreshed.surface(surface).changedOperations());
+        }
+        tab.close();
+        boss.hide();
+        scheduler.advanceTicks(3);
+        PresentationStats closed = board.presentationStats();
+        for (PresentationStats.Surface surface : List.of(PresentationStats.Surface.TAB, PresentationStats.Surface.BOSS_BAR)) {
+            assertTrue(closed.surface(surface).requests() > refreshed.surface(surface).requests());
+            assertTrue(closed.surface(surface).changedOperations() > refreshed.surface(surface).changedOperations());
+        }
     }
 
     @BeforeEach

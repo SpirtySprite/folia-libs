@@ -95,7 +95,7 @@ public final class SidebarService implements Boards {
         manualPlayers.remove(id);
         manualRecipes.remove(id);
         rememberedLayouts.remove(id);
-        generations.put(id, sequence.incrementAndGet());
+        generations.remove(id);
         cancelScopes(id);
         SidebarImpl removed = sidebars.remove(id);
         if (removed != null) {
@@ -256,11 +256,11 @@ public final class SidebarService implements Boards {
         Sidebar sidebar = sidebar(player);
         Schedulers.onEntity(runtime.plugin(), player, () -> {
             if (current(player, generation)) {
-                renderLayout(player, layout);
+                Layout accepted = renderLayout(player, layout);
                 LayoutStore store = layoutStore;
-                if (store != null) {
+                if (accepted != null && store != null) {
                     UUID id = player.getUniqueId();
-                    String name = layout.name();
+                    String name = accepted.name();
                     Schedulers.async(runtime.plugin(), () -> {
                         try {
                             store.remember(id, name).exceptionally(failure -> {
@@ -277,12 +277,15 @@ public final class SidebarService implements Boards {
         return sidebar;
     }
 
-    private void renderLayout(Player player, Layout layout) {
+    private Layout renderLayout(Player player, Layout layout) {
         LayoutApplyEvent event = new LayoutApplyEvent(player, layout);
         Bukkit.getPluginManager().callEvent(event);
-        if (!event.isCancelled()) {
-            event.getLayout().applyTo(owner, player);
+        if (event.isCancelled()) {
+            return null;
         }
+        Layout accepted = event.getLayout();
+        accepted.applyTo(owner, player);
+        return accepted;
     }
 
     private boolean current(Player player, long generation) {
@@ -560,6 +563,7 @@ public final class SidebarService implements Boards {
         } else {
             SidebarImpl sidebar = sidebars.get(id);
             if (sidebar != null) {
+                sidebar.refreshAction(null);
                 sidebar.clearLines().title(net.kyori.adventure.text.Component.empty());
             }
             cancelRefresh(id);

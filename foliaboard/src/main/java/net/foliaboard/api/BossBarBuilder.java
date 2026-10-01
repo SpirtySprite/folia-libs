@@ -89,6 +89,7 @@ public final class BossBarBuilder {
                 new ManagedBossBarImpl.Spec(text, progress, color, overlay, placeholders, refreshTicks > 0 ? refreshTicks : dynamic ? 20 : -1, lifetimeTicks),
                 board::forget);
         bar.cleanupPlugin(board.runtime().cleanupPlugin());
+        bar.metrics(board.runtime().metrics());
         board.track(player, id, bar);
         bar.start();
         return bar;

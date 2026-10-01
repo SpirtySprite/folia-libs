@@ -113,6 +113,7 @@ public final class TabBuilder {
         TabImpl tab = new TabImpl(board.runtime().plugin(), board.runtime().placeholders(), player,
                 new TabImpl.Spec(header, footer, name, order, placeholders, refreshTicks > 0 ? refreshTicks : dynamic ? 20 : -1, resetOnClose));
         tab.cleanupPlugin(board.runtime().cleanupPlugin());
+        tab.metrics(board.runtime().metrics());
         board.track(player, tab);
         tab.start();
         return tab;

@@ -65,7 +65,7 @@ Every operation that touches an inventory (open, close, update, title change, an
 	<dependency>
 	    <groupId>com.github.SpirtySprite.folia-libs</groupId>
 	    <artifactId>foliagui-api</artifactId>
-	    <version>foliagui-v1.3.0</version>
+	    <version>foliagui-v1.3.1</version>
 	</dependency>
 ```
 

@@ -1,17 +1,14 @@
 package net.foliaboard.api.text;
 
-import net.foliacommons.text.Legacy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class Text {
-    private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final int CACHE_LIMIT = 2048;
     private static final Map<String, Component> CACHE = new ConcurrentHashMap<>();
 
@@ -19,19 +16,19 @@ public final class Text {
     }
 
     public static @NotNull MiniMessage miniMessage() {
-        return MM;
+        return net.foliacommons.text.Text.miniMessage();
     }
 
     public static @NotNull Component mini(@NotNull String miniMessage) {
-        return MM.deserialize(miniMessage);
+        return net.foliacommons.text.Text.mini(miniMessage);
     }
 
     public static @NotNull Component mini(@NotNull String miniMessage, @NotNull TagResolver... resolvers) {
-        return MM.deserialize(miniMessage, resolvers);
+        return net.foliacommons.text.Text.mini(miniMessage, resolvers);
     }
 
     public static @NotNull Component parse(@NotNull String anyFormat) {
-        return MM.deserialize(Legacy.toMini(anyFormat));
+        return net.foliacommons.text.Text.parse(anyFormat == null ? "" : anyFormat);
     }
 
     public static @NotNull Component cached(@NotNull String anyFormat) {
@@ -48,26 +45,15 @@ public final class Text {
     }
 
     public static @NotNull String toMini(@NotNull Component component) {
-        return MM.serialize(component);
+        return net.foliacommons.text.Text.toMini(component);
     }
 
     public static @NotNull String plain(@NotNull Component component) {
-        return PlainTextComponentSerializer.plainText().serialize(component);
+        return net.foliacommons.text.Text.plain(component);
     }
 
     public static @NotNull String escape(@NotNull String value) {
-        if (value.indexOf('<') < 0 && value.indexOf('\\') < 0) {
-            return value;
-        }
-        StringBuilder escaped = new StringBuilder(value.length() + 8);
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '<' || character == '\\') {
-                escaped.append('\\');
-            }
-            escaped.append(character);
-        }
-        return escaped.toString();
+        return net.foliacommons.text.Text.escape(value);
     }
 
     public static @NotNull Component empty() {

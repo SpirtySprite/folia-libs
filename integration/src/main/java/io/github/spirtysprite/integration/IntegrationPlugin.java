@@ -7,6 +7,7 @@ import net.foliaboard.FoliaBoard;
 import net.foliacommons.FoliaEnvironment;
 import net.foliacommons.diagnostics.Diagnostics;
 import net.foliacommons.scheduler.Scheduler;
+import net.foliacommons.scheduler.TaskGroup;
 import net.foliacommons.version.ServerVersion;
 import net.folianpc.api.Capabilities;
 import net.folianpc.api.FoliaNpc;
@@ -85,6 +86,8 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         chain = chain.thenCompose(v -> check("scheduler-global", this::schedulerGlobal));
         chain = chain.thenCompose(v -> check("scheduler-async", this::schedulerAsync));
         chain = chain.thenCompose(v -> check("scheduler-entity", this::schedulerEntity));
+        chain = chain.thenCompose(v -> check("scheduler-location", this::schedulerLocation));
+        chain = chain.thenCompose(v -> check("scheduler-cancellation", this::schedulerCancellation));
         chain = chain.thenCompose(v -> check("board", this::board));
         chain = chain.thenCompose(v -> check("gui", this::gui));
         chain = chain.thenCompose(v -> check("npc", this::npc));
@@ -162,6 +165,33 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         if (!scheduler.runAsync(() -> result.complete("ran on " + Thread.currentThread().getName()))) {
             throw new IllegalStateException("runAsync refused the task");
         }
+        return result;
+    }
+
+    private CompletableFuture<String> schedulerLocation() {
+        Location location = Bukkit.getWorlds().get(0).getSpawnLocation();
+        return scheduler.callForLocation(location, () -> {
+            if (!Bukkit.getServer().isOwnedByCurrentRegion(location)) {
+                throw new IllegalStateException("location call ran outside its owning region");
+            }
+            return "owned region on " + Thread.currentThread().getName();
+        });
+    }
+
+    private CompletableFuture<String> schedulerCancellation() {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        TaskGroup group = new TaskGroup();
+        group.add(scheduler.scheduleGlobalLater(calls::incrementAndGet, 5));
+        group.add(scheduler.scheduleAsyncLater(calls::incrementAndGet, java.time.Duration.ofMillis(250)));
+        group.close();
+        CompletableFuture<String> result = new CompletableFuture<>();
+        scheduler.scheduleGlobalLater(() -> {
+            if (calls.get() != 0) {
+                result.completeExceptionally(new IllegalStateException("cancelled callbacks executed"));
+            } else {
+                result.complete("delayed global and async callbacks cancelled");
+            }
+        }, 10);
         return result;
     }
 

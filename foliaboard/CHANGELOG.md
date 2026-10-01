@@ -6,6 +6,9 @@ All notable changes to FoliaBoard are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Text parsing and serialization use shared folia-commons primitives, preserving wrapper behavior and caching.
+
 ## [1.2.0] - 2026-10-01
 
 ### Changed

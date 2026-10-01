@@ -749,6 +749,9 @@ boolean isThisOneOpen = someGui.isOpenFor(player);
 
 `Text` bridges legacy colour codes, MiniMessage, and Adventure components:
 
+Parsing and serialization use `net.foliacommons.text.Text`. The GUI wrapper keeps
+null inputs as null and disables implicit item italics while preserving explicit italics.
+
 ```java
 Component fromLegacy = Text.of("&aHello");
 Component fromMini = Text.mini("<gradient:#f00:#00f>Hello</gradient>");

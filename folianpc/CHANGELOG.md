@@ -6,6 +6,9 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Text parsing and serialization use shared folia-commons primitives, preserving empty input and escaping behavior.
+
 ## [1.3.0] - 2026-10-01
 
 ### Fixed

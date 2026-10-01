@@ -44,5 +44,17 @@ class TextTest {
         assertNull(Text.of(null));
         assertNull(Text.mini(null));
         assertNull(Text.label(null));
+        assertNull(Text.parse(null));
+    }
+
+    @Test
+    void mixedFormattingKeepsItemDefaultsAndSectionSignPrecedence() {
+        Component mixed = Text.parse("&6Gold <blue>blue");
+        assertEquals("Gold blue", Text.plain(mixed));
+        assertEquals(TextDecoration.State.FALSE, mixed.decoration(TextDecoration.ITALIC));
+        assertEquals(TextDecoration.State.TRUE, Text.parse("<italic>yes").decoration(TextDecoration.ITALIC));
+        assertEquals("§aGreen &cLiteral", Text.toLegacy(Text.of("§aGreen &cLiteral")));
+        String value = "<red>name <unknown>";
+        assertEquals(value, Text.plain(Text.mini(Text.escape(value))));
     }
 }

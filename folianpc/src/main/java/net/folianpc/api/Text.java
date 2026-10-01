@@ -1,17 +1,8 @@
 package net.folianpc.api;
 
-import net.foliacommons.text.Legacy;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 public final class Text {
-
-    private static final MiniMessage MINI = MiniMessage.miniMessage();
-    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.builder()
-            .character('&')
-            .hexColors()
-            .build();
 
     private Text() {
     }
@@ -20,26 +11,26 @@ public final class Text {
         if (text == null || text.isEmpty()) {
             return Component.empty();
         }
-        return MINI.deserialize(Legacy.toMini(text));
+        return net.foliacommons.text.Text.parse(text);
     }
 
     public static String escape(String value) {
-        return value == null ? "" : MINI.escapeTags(value);
+        return value == null ? "" : net.foliacommons.text.Text.escapeTags(value);
     }
 
     public static String plain(Component component) {
-        return net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(component);
+        return net.foliacommons.text.Text.plain(component);
     }
 
     public static Component mini(String miniMessage) {
-        return MINI.deserialize(miniMessage);
+        return net.foliacommons.text.Text.mini(miniMessage);
     }
 
     public static Component legacy(String legacyText) {
-        return LEGACY.deserialize(legacyText);
+        return net.foliacommons.text.Text.legacyHex(legacyText);
     }
 
     public static String toMini(Component component) {
-        return MINI.serialize(component);
+        return net.foliacommons.text.Text.toMini(component);
     }
 }

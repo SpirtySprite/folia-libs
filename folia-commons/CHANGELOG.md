@@ -6,6 +6,13 @@ All notable changes to folia-commons are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Structured, immutable diagnostic entries with optional sections and explanations.
+
+### Fixed
+- Built diagnostics remain unchanged when their builder is reused.
+- Unknown and malformed server versions no longer enable features intended for newer servers.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added

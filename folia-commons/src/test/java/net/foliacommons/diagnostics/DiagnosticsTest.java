@@ -11,6 +11,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DiagnosticsTest {
 
     @Test
+    void builtReportsDoNotChangeWhenTheirBuilderIsReused() {
+        Diagnostics.Builder builder = Diagnostics.named("Library").section("Features").ok("Scheduling");
+        Diagnostics first = builder.build();
+        String text = first.toString();
+        builder.unavailable("Packets", "missing");
+        Diagnostics second = builder.build();
+
+        assertTrue(first.healthy());
+        assertEquals(text, first.toString());
+        assertEquals(1, first.entries().size());
+        assertFalse(second.healthy());
+        assertEquals(Diagnostics.Status.UNAVAILABLE, second.entries().get(1).status());
+        assertEquals("Features", second.entries().get(1).section().orElseThrow());
+        assertEquals("missing", second.entries().get(1).detail().orElseThrow());
+        org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException.class,
+                () -> first.entries().clear());
+    }
+
+    @Test
     void aReportWithOnlyWorkingFeaturesIsHealthy() {
         Diagnostics report = Diagnostics.named("Lib 1.0").section("Features").ok("A").ok("B").build();
 

@@ -47,6 +47,8 @@ ServerVersion.parse("1.21.4-R0.1-SNAPSHOT");
 ```
 
 Calendar versions pass every `1.x` check, because they are newer than all of them.
+Malformed or overflowing version strings become `0.0.0` and never enable a feature. Calendar numbering
+is recognized from major version 26 onward; this does not extend the libraries' supported server range.
 
 ## Legacy
 
@@ -73,6 +75,18 @@ Diagnostics report = Diagnostics.named("MyLibrary 1.0")
 getLogger().info(report.toString());
 report.healthy();    // false
 report.problems();   // ["Per-viewer tab names", "Skins"]
+```
+
+Built reports are immutable snapshots. Reusing a builder cannot change an earlier report. Builders
+serialize individual operations across threads; keep a complete section recipe on one thread to
+preserve its grouping. Structured entries avoid parsing the report's display text:
+
+```java
+for (Diagnostics.Entry entry : report.entries()) {
+    if (entry.status() == Diagnostics.Status.UNAVAILABLE) {
+        getLogger().warning(entry.name() + ": " + entry.detail().orElse("unavailable"));
+    }
+}
 ```
 
 ## FoliaEnvironment

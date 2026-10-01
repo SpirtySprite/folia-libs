@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * A small report a library can print so users can paste one block into a bug report.
@@ -31,7 +32,7 @@ public final class Diagnostics {
 
     private Diagnostics(String title, List<Section> sections) {
         this.title = title;
-        this.sections = sections;
+        this.sections = List.copyOf(sections);
     }
 
     public static @NotNull Builder named(@NotNull String title) {
@@ -58,7 +59,30 @@ public final class Diagnostics {
                 }
             }
         }
-        return names;
+        return List.copyOf(names);
+    }
+
+    /** Immutable entries in display order. Safe to inspect from any thread. */
+    public @NotNull List<Entry> entries() {
+        List<Entry> entries = new ArrayList<>();
+        for (Section section : sections) {
+            for (Line line : section.lines) {
+                entries.add(new Entry(Optional.ofNullable(section.name), line.name, line.status,
+                        Optional.ofNullable(line.detail)));
+            }
+        }
+        return List.copyOf(entries);
+    }
+
+    /** One immutable diagnostic entry, including its optional section and explanation. */
+    public record Entry(Optional<String> section, String name, Status status, Optional<String> detail) {
+        /** Requires non-null fields; use empty optionals for absent values. */
+        public Entry {
+            Objects.requireNonNull(section, "section");
+            Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(detail, "detail");
+        }
     }
 
     @Override
@@ -80,7 +104,8 @@ public final class Diagnostics {
         return out.toString().stripTrailing();
     }
 
-    private enum Status {
+    /** Whether an entry describes a working, informational, reduced, or missing feature. */
+    public enum Status {
         OK("[ok]"), INFO("[--]"), DEGRADED("[!!]"), UNAVAILABLE("[xx]");
 
         private final String symbol;
@@ -95,10 +120,15 @@ public final class Diagnostics {
 
     private static final class Section {
         private final String name;
-        private final List<Line> lines = new ArrayList<>();
+        private final List<Line> lines;
 
         private Section(String name) {
+            this(name, new ArrayList<>());
+        }
+
+        private Section(String name, List<Line> lines) {
             this.name = name;
+            this.lines = lines;
         }
     }
 
@@ -117,13 +147,13 @@ public final class Diagnostics {
         }
 
         /** Starts (or continues) a named group of lines. */
-        public @NotNull Builder section(@NotNull String name) {
-            this.current = section0(name);
+        public synchronized @NotNull Builder section(@NotNull String name) {
+            this.current = section0(Objects.requireNonNull(name, "name"));
             return this;
         }
 
         /** Adds the server software, Minecraft version, Java version and whether the server is Folia. */
-        public @NotNull Builder withEnvironment() {
+        public synchronized @NotNull Builder withEnvironment() {
             Section previous = current;
             current = section0("Environment");
             String software;
@@ -140,39 +170,39 @@ public final class Diagnostics {
             return this;
         }
 
-        public @NotNull Builder ok(@NotNull String feature) {
+        public synchronized @NotNull Builder ok(@NotNull String feature) {
             return add(Status.OK, feature, null);
         }
 
-        public @NotNull Builder info(@NotNull String name, @NotNull String value) {
-            return add(Status.INFO, name, value);
+        public synchronized @NotNull Builder info(@NotNull String name, @NotNull String value) {
+            return add(Status.INFO, name, Objects.requireNonNull(value, "value"));
         }
 
         /** The feature works, but with reduced behaviour. */
-        public @NotNull Builder degraded(@NotNull String feature, @NotNull String reason) {
-            return add(Status.DEGRADED, feature, reason);
+        public synchronized @NotNull Builder degraded(@NotNull String feature, @NotNull String reason) {
+            return add(Status.DEGRADED, feature, Objects.requireNonNull(reason, "reason"));
         }
 
         /** The feature does not work at all on this server. */
-        public @NotNull Builder unavailable(@NotNull String feature, @NotNull String reason) {
-            return add(Status.UNAVAILABLE, feature, reason);
+        public synchronized @NotNull Builder unavailable(@NotNull String feature, @NotNull String reason) {
+            return add(Status.UNAVAILABLE, feature, Objects.requireNonNull(reason, "reason"));
         }
 
         /** Shorthand for {@link #ok} or {@link #unavailable} depending on {@code available}. */
-        public @NotNull Builder feature(@NotNull String feature, boolean available, @NotNull String reasonIfMissing) {
+        public synchronized @NotNull Builder feature(@NotNull String feature, boolean available, @NotNull String reasonIfMissing) {
             return available ? ok(feature) : unavailable(feature, reasonIfMissing);
         }
 
         private Builder add(Status status, String name, @Nullable String detail) {
-            current.lines.add(new Line(status, name, detail));
+            current.lines.add(new Line(status, Objects.requireNonNull(name, "name"), detail));
             return this;
         }
 
-        public @NotNull Diagnostics build() {
+        public synchronized @NotNull Diagnostics build() {
             List<Section> built = new ArrayList<>();
             for (Section section : sections.values()) {
                 if (!section.lines.isEmpty()) {
-                    built.add(section);
+                    built.add(new Section(section.name, List.copyOf(section.lines)));
                 }
             }
             return new Diagnostics(title, built);

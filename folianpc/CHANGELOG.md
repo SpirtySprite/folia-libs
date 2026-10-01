@@ -7,6 +7,10 @@ All notable changes to FoliaNPC are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Managed patrol and follow behavior with waits, distance limits and lifecycle completion.
+- Coherent appearance batches, per-viewer appearance and equipment overrides, and configurable entity-relative nametags.
+- Bounded skin caches and network concurrency, typed fetch outcomes and latest-request-only skin application.
+- High-level persistence loading with migration reports for dropped fields, schema assumptions and substituted values.
 - Snapshot-based navigation with bounded search options, clearance dimensions, ground following and observable movement outcomes.
 - Visibility hysteresis for existing viewers.
 

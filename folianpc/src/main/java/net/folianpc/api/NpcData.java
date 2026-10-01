@@ -83,6 +83,12 @@ public record NpcData(UUID id, String name, EntityType type, String world,
         });
     }
 
+    /** Reads saved data with a report of schema assumptions, ignored fields and fallback values. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public static @NotNull NpcDataReadResult deserializeWithReport(@NotNull Map<String, ?> map) {
+        return NpcDataCodec.fromMapWithReport(map);
+    }
+
     public static final class Builder {
         private UUID id;
         private String name = "NPC";

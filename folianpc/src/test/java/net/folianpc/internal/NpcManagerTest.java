@@ -1199,7 +1199,7 @@ class NpcManagerTest {
         manager.tick();
         int showsAfterSpawn = backend.shows.size();
 
-        npc.equipment(EquipmentSlot.HAND, null);
+        npc.equipment(EquipmentSlot.HAND, mutableItem(2));
 
         assertEquals(1, backend.equips.size());
         assertEquals(npc.entityId(), backend.equips.get(0).entityId());
@@ -1729,6 +1729,169 @@ class NpcManagerTest {
         track(viewer, "world", 13, 64, 0);
         manager.tick();
         assertFalse(npc.viewers().contains(viewer.getUniqueId()));
+    }
+
+    @Test
+    void appearanceBatchCombinesRespawnsAndPartialUpdates() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        backend.shows.clear();
+        npc.batch(target -> target.name("Alice").glowing(true).scale(2).collidable(false));
+        assertEquals(1, backend.shows.size());
+        assertEquals("Alice", backend.shows.getFirst().npc().name());
+        assertEquals(2, backend.shows.getFirst().npc().scale());
+        assertTrue(backend.shows.getFirst().npc().glowing());
+        assertTrue(backend.metas.isEmpty());
+        backend.shows.clear();
+        npc.batch(target -> target.glowing(false).invisible(true).skinLayers(false));
+        assertEquals(1, backend.metas.size());
+        assertTrue(backend.shows.isEmpty());
+        npc.batch(target -> target.batch(inner -> inner.glowing(true)));
+        assertEquals(2, backend.metas.size());
+    }
+
+    @Test
+    void unchangedAppearanceAvoidsPacketsAndThrowingBatchFlushesCompletedMutations() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        backend.shows.clear();
+        npc.name("Bob").skin(null).mirrorSkin(false).nametagVisible(true).glowing(false)
+                .invisible(false).skinLayers(true).scale(1).baby(false).collidable(true)
+                .showInTabList(false).pose(net.folianpc.api.NpcPose.STANDING).appearance(npc.appearance());
+        assertTrue(backend.shows.isEmpty());
+        assertTrue(backend.metas.isEmpty());
+        assertTrue(backend.scales.isEmpty());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> npc.batch(target -> { target.glowing(true); throw new IllegalStateException("partial"); }));
+        assertTrue(npc.glowing());
+        assertEquals(1, backend.metas.size());
+        npc.invisible(true);
+        assertEquals(2, backend.metas.size());
+    }
+
+    @Test
+    void viewerOverridesStayIndependentAndDisconnectClearsThem() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player a = player(UUID.randomUUID());
+        Player b = player(UUID.randomUUID());
+        track(a, "world", 0, 64, 1);
+        track(b, "world", 0, 64, 2);
+        var alternate = new net.folianpc.api.NpcAppearance(true, false, true, 2,
+                net.kyori.adventure.text.format.NamedTextColor.RED, true, false);
+        npc.appearanceFor(a.getUniqueId(), net.folianpc.api.ViewerAppearance.builder().appearance(alternate).build());
+        manager.tick();
+        var shownA = backend.shows.stream().filter(show -> show.viewer() == a).findFirst().orElseThrow().npc();
+        var shownB = backend.shows.stream().filter(show -> show.viewer() == b).findFirst().orElseThrow().npc();
+        assertTrue(shownA.glowing());
+        assertTrue(shownA.needsTeam());
+        assertEquals(2, shownA.scale());
+        assertFalse(shownB.glowing());
+        assertFalse(npc.glowing());
+        npc.clearAppearanceFor(a.getUniqueId());
+        assertFalse(npc.snapshot(a.getUniqueId()).glowing());
+        npc.appearanceFor(a.getUniqueId(), net.folianpc.api.ViewerAppearance.builder().appearance(alternate).build());
+        manager.dropPlayer(a.getUniqueId());
+        assertFalse(npc.snapshot(a.getUniqueId()).glowing());
+    }
+
+    @Test
+    void nametagLayoutFollowsEntityDimensionsAndSupportsFixedOffsets() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        npc.nametag(List.of("upper", "lower"));
+        assertEquals(66.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.baby(true).scale(2);
+        assertEquals(66.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.type(org.bukkit.entity.EntityType.ENDERMAN).baby(false);
+        assertEquals(70.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.5, 3, false));
+        assertEquals(67, npc.snapshot().hologram().getLast().y());
+        assertEquals(67.5, npc.snapshot().hologram().getFirst().y());
+    }
+
+    @Test
+    void latestSkinRequestWinsAndDirectChoicesDiscardPendingFetches() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        CompletableFuture<Skin> first = new CompletableFuture<>();
+        CompletableFuture<Skin> second = new CompletableFuture<>();
+        var old = npc.skinAsync(first);
+        var fresh = npc.skinAsync(second);
+        second.complete(Skin.of("new", null));
+        first.complete(Skin.of("old", null));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.SUPERSEDED, old.join().status());
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.APPLIED, fresh.join().status());
+        assertEquals("new", npc.skin().value());
+        CompletableFuture<Skin> third = new CompletableFuture<>();
+        var pending = npc.skinAsync(third);
+        npc.skin(Skin.of("explicit", null));
+        third.complete(Skin.of("late", null));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.SUPERSEDED, pending.join().status());
+        assertEquals("explicit", npc.skin().value());
+        var failed = npc.skinAsync(CompletableFuture.failedFuture(new IllegalStateException("fetch")));
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.FAILED, failed.join().status());
+        var removed = npc.skinAsync(new CompletableFuture<>());
+        npc.remove();
+        assertEquals(net.folianpc.api.SkinApplyResult.Status.REMOVED, removed.join().status());
+    }
+
+    @Test
+    void patrolCopiesWaypointsWaitsAndFinishesOrStopsRepeating() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        Location first = new Location(world, 1.5, 1, 0.5);
+        var navigation = net.folianpc.api.NavigationOptions.builder().radius(8).build();
+        var task = npc.patrol(List.of(first, new Location(world, 2.5, 1, 0.5)),
+                new net.folianpc.api.PatrolOptions(10, 4, false, navigation));
+        first.setX(100);
+        for (int pass = 0; pass < 40; pass++) manager.tick();
+        assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, task.result().join().status());
+        assertEquals(2.5, npc.x());
+        var repeating = npc.patrol(List.of(new Location(world, 1.5, 1, 0.5), new Location(world, 2.5, 1, 0.5)),
+                new net.folianpc.api.PatrolOptions(10, 2, true, navigation));
+        for (int pass = 0; pass < 30; pass++) manager.tick();
+        assertFalse(repeating.result().isDone());
+        npc.stopWalking();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, repeating.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    @Test
+    void followUsesOwnedLocationHoldsDistanceAndEndsOnDisconnectOrManualMovement() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        Player target = player(UUID.randomUUID());
+        track(target, "world", 1.5, 1, 0.5);
+        AtomicReference<Location> location = new AtomicReference<>(new Location(world, 1.5, 1, 0.5));
+        when(target.getLocation()).thenAnswer(inv -> location.get().clone());
+        var options = new net.folianpc.api.FollowOptions(4, 2, 20, 2,
+                net.folianpc.api.NavigationOptions.builder().radius(16).build());
+        var task = npc.follow(target.getUniqueId(), options);
+        manager.tick();
+        assertFalse(npc.moving());
+        location.set(new Location(world, 8.5, 1, 0.5));
+        track(target, "world", 8.5, 1, 0.5);
+        manager.tick();
+        manager.tick();
+        assertTrue(npc.moving());
+        npc.walkTo(new Location(world, 2.5, 1, 0.5), 4);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, task.result().join().status());
+        var disconnected = npc.follow(target.getUniqueId(), options);
+        tracker.remove(target.getUniqueId());
+        manager.tick();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, disconnected.result().join().status());
+        assertFalse(npc.moving());
+    }
+
+    @Test
+    void removedAndClosedServicesCompletePendingBehaviors() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        var task = npc.patrol(List.of(new Location(flatWorld("world"), 3.5, 1, 0.5)), net.folianpc.api.PatrolOptions.defaults());
+        manager.close();
+        assertEquals(net.folianpc.api.MovementResult.Status.SHUTDOWN, task.result().join().status());
+        assertFalse(npc.moving());
     }
 
 }

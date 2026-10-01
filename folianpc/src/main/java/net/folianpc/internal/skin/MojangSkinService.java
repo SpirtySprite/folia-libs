@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.folianpc.api.Skin;
+import net.folianpc.api.SkinFetchResult;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -26,7 +27,65 @@ public final class MojangSkinService {
     record Cached(CompletableFuture<Skin> skin, long expiresAt) {
     }
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+    private final HttpClient http;
+    private final SkinRequests requests;
+    private final java.util.Set<CompletableFuture<Skin>> pending = ConcurrentHashMap.newKeySet();
+    private volatile boolean closed;
+    private volatile int maxEntries = 1024;
+
+    public MojangSkinService() {
+        http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+        requests = new SkinRequests(request -> http.sendAsync(request, HttpResponse.BodyHandlers.ofString()));
+    }
+
+    MojangSkinService(Function<HttpRequest, CompletableFuture<HttpResponse<String>>> sender) {
+        http = null;
+        requests = new SkinRequests(sender);
+    }
+
+    public synchronized void limits(int entries, int parallel, int queued) {
+        if (entries < 1 || entries > 65536 || parallel < 1 || parallel > 64 || queued < 0 || queued > 65536) {
+            throw new IllegalArgumentException("Invalid skin cache or request limits");
+        }
+        maxEntries = entries;
+        prune(nameCache);
+        prune(idCache);
+        prune(urlCache);
+        requests.limits(parallel, queued);
+    }
+
+    public CompletableFuture<SkinFetchResult> result(CompletableFuture<Skin> future) {
+        return future.handle((skin, error) -> {
+            if (error == null) return new SkinFetchResult(SkinFetchResult.Status.FOUND, java.util.Optional.of(skin),
+                    Duration.ZERO, java.util.Optional.empty());
+            Throwable cause = unwrap(error);
+            SkinFetchResult.Status status = cause instanceof SkinFailure failure ? failure.status
+                    : cause instanceof com.google.gson.JsonParseException || cause instanceof IllegalArgumentException
+                    || cause instanceof NullPointerException || cause instanceof IllegalStateException
+                    ? SkinFetchResult.Status.MALFORMED : SkinFetchResult.Status.UNAVAILABLE;
+            Duration retry = cause instanceof SkinFailure failure ? failure.retryAfter : Duration.ZERO;
+            return new SkinFetchResult(status, java.util.Optional.empty(), retry, java.util.Optional.of(cause));
+        });
+    }
+
+    private static Throwable unwrap(Throwable error) {
+        while ((error instanceof java.util.concurrent.CompletionException || error instanceof java.util.concurrent.ExecutionException)
+                && error.getCause() != null) error = error.getCause();
+        return error;
+    }
+
+    private static long now() { return System.nanoTime() / 1_000_000; }
+
+    private <K> void prune(ConcurrentHashMap<K, Cached> cache) {
+        long time = now();
+        cache.entrySet().removeIf(entry -> entry.getValue().skin().isDone() && entry.getValue().expiresAt() <= time);
+        if (cache.size() >= maxEntries) {
+            for (var entry : cache.entrySet()) {
+                if (cache.size() < maxEntries) break;
+                if (entry.getValue().skin().isDone()) cache.remove(entry.getKey(), entry.getValue());
+            }
+        }
+    }
     private final ConcurrentHashMap<String, Cached> nameCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Cached> idCache = new ConcurrentHashMap<>();
 
@@ -55,38 +114,40 @@ public final class MojangSkinService {
 
     <K> CompletableFuture<Skin> lookup(ConcurrentHashMap<K, Cached> cache, K key,
                                        Function<K, CompletableFuture<Skin>> fetch) {
-        long now = System.currentTimeMillis();
-        boolean[] fresh = new boolean[1];
-        Cached entry = cache.compute(key, (ignored, existing) -> {
-            if (existing != null && existing.expiresAt() > now) {
-                return existing;
+        java.util.Objects.requireNonNull(key, "key");
+        Cached entry;
+        synchronized (this) {
+            if (closed) return CompletableFuture.failedFuture(SkinRequests.failure(SkinFetchResult.Status.SHUTDOWN));
+            Cached existing = cache.get(key);
+            if (existing != null && (!existing.skin().isDone() || existing.expiresAt() > now())) {
+                return existing.skin().copy();
             }
-            fresh[0] = true;
-            return new Cached(new CompletableFuture<>(), now + ttlMillis);
-        });
-        if (fresh[0]) {
-            CompletableFuture<Skin> pending = entry.skin();
-            CompletableFuture<Skin> fetched;
-            try {
-                fetched = fetch.apply(key);
-            } catch (RuntimeException failure) {
-                fetched = CompletableFuture.failedFuture(failure);
-            }
-            fetched.whenComplete((result, error) -> {
-                if (error != null) {
-                    long cooldown = failureTtlMillis;
-                    if (cooldown > 0) {
-                        cache.replace(key, entry, new Cached(pending, System.currentTimeMillis() + cooldown));
-                    } else {
-                        cache.remove(key, entry);
-                    }
-                    pending.completeExceptionally(error);
-                } else {
-                    pending.complete(result);
-                }
-            });
+            prune(cache);
+            if (cache.size() >= maxEntries) return CompletableFuture.failedFuture(SkinRequests.failure(SkinFetchResult.Status.BUSY));
+            entry = new Cached(new CompletableFuture<>(), Long.MAX_VALUE);
+            cache.put(key, entry);
+            pending.add(entry.skin());
         }
-        return entry.skin();
+        CompletableFuture<Skin> fetched;
+        try { fetched = java.util.Objects.requireNonNull(fetch.apply(key), "fetch result"); }
+        catch (RuntimeException failure) { fetched = CompletableFuture.failedFuture(failure); }
+        fetched.whenComplete((skin, error) -> {
+            long duration = error == null ? ttlMillis : failureTtlMillis;
+            Throwable cause = error == null ? null : unwrap(error);
+            if (cause instanceof SkinFailure failure) duration = Math.max(duration, failure.retryAfter.toMillis());
+            boolean ending;
+            synchronized (this) {
+                ending = closed;
+                if (ending) cache.remove(key, entry);
+                else if (duration > 0) cache.replace(key, entry, new Cached(entry.skin(), now() + duration));
+                else cache.remove(key, entry);
+                pending.remove(entry.skin());
+            }
+            if (ending) entry.skin().completeExceptionally(SkinRequests.failure(SkinFetchResult.Status.SHUTDOWN));
+            else if (error == null) entry.skin().complete(skin);
+            else entry.skin().completeExceptionally(error);
+        });
+        return entry.skin().copy();
     }
 
     private static final String MINESKIN = "https://api.mineskin.org/generate/url";
@@ -104,12 +165,7 @@ public final class MojangSkinService {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
-        return http.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
-            if (response.statusCode() != 200) {
-                throw new IllegalStateException("Mineskin returned " + response.statusCode());
-            }
-            return parseMineskin(response.body());
-        });
+        return requests.send(request).thenApply(MojangSkinService::body).thenApply(MojangSkinService::parseMineskin);
     }
 
     static Skin parseMineskin(String json) {
@@ -120,17 +176,46 @@ public final class MojangSkinService {
 
     private CompletableFuture<String> get(String url) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT).GET().build();
-        return http.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
-            String body = response.body();
-            if (response.statusCode() != 200 || body == null || body.isBlank()) {
-                throw new IllegalStateException("Mojang API returned " + response.statusCode() + " for " + url);
-            }
-            return body;
-        });
+        return requests.send(request).thenApply(MojangSkinService::body);
+    }
+
+    private static String body(HttpResponse<String> response) {
+        int status = response.statusCode();
+        if (status == 204 || status == 404) throw SkinRequests.failure(SkinFetchResult.Status.NOT_FOUND);
+        if (status == 429) {
+            Duration retry = response.headers().firstValue("Retry-After").map(MojangSkinService::retryAfter).orElse(Duration.ZERO);
+            throw new SkinFailure(SkinFetchResult.Status.RATE_LIMITED, "Skin service returned 429", retry);
+        }
+        if (status != 200) throw SkinRequests.failure(SkinFetchResult.Status.UNAVAILABLE);
+        if (response.body() == null || response.body().isBlank()) throw SkinRequests.failure(SkinFetchResult.Status.MALFORMED);
+        return response.body();
+    }
+
+    private static Duration retryAfter(String value) {
+        try { return Duration.ofSeconds(Math.min(86400, Math.max(0, Long.parseLong(value)))); }
+        catch (RuntimeException invalidSeconds) {
+            try {
+                Duration duration = Duration.between(java.time.Instant.now(), java.time.ZonedDateTime.parse(value,
+                        java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant());
+                return duration.isNegative() ? Duration.ZERO : duration.compareTo(Duration.ofDays(1)) > 0 ? Duration.ofDays(1) : duration;
+            } catch (RuntimeException invalidDate) { return Duration.ZERO; }
+        }
     }
 
     public void close() {
-        http.shutdownNow();
+        java.util.List<CompletableFuture<Skin>> ending;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            ending = java.util.List.copyOf(pending);
+            pending.clear();
+            nameCache.clear();
+            idCache.clear();
+            urlCache.clear();
+        }
+        ending.forEach(future -> future.completeExceptionally(SkinRequests.failure(SkinFetchResult.Status.SHUTDOWN)));
+        requests.close();
+        if (http != null) http.shutdownNow();
     }
 
     static UUID parseId(String json) {

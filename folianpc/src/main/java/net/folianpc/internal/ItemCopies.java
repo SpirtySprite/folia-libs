@@ -11,6 +11,7 @@ public final class ItemCopies {
     }
 
     public static Map<EquipmentSlot, ItemStack> copy(Map<EquipmentSlot, ItemStack> items) {
+        if (items.isEmpty()) return Map.of();
         Map<EquipmentSlot, ItemStack> result = new EnumMap<>(EquipmentSlot.class);
         items.forEach((slot, item) -> result.put(slot, item.clone()));
         return Map.copyOf(result);

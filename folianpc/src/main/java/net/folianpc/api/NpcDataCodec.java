@@ -98,6 +98,7 @@ public final class NpcDataCodec {
 
     @SuppressWarnings("deprecation")
     public static @NotNull NpcData fromMap(@NotNull Map<String, ?> map, @NotNull Consumer<String> warn) {
+        map = sanitize(map, warn, false);
         int schema = number(map.get("schema"), 1).intValue();
         if (schema > SCHEMA) {
             warn.accept("NPC data has schema " + schema + " but this version understands " + SCHEMA
@@ -183,6 +184,113 @@ public final class NpcDataCodec {
                     bool(style.get("seeThrough"), defaults.seeThrough())));
         }
         return builder.build();
+    }
+
+    /** Decodes a snapshot and retains schema, ignored-field and fallback warnings. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public static @NotNull NpcDataReadResult fromMapWithReport(@NotNull Map<String, ?> map) {
+        List<String> warnings = new ArrayList<>();
+        Map<String, ?> cleaned = sanitize(map, warnings::add, true);
+        if (!map.containsKey("schema")) warnings.add("Missing schema, assuming schema " + SCHEMA);
+        return new NpcDataReadResult(fromMap(cleaned, warnings::add), warnings);
+    }
+
+    private static Map<String, ?> sanitize(Map<String, ?> source, Consumer<String> warn, boolean reportDrops) {
+        java.util.Objects.requireNonNull(source, "map");
+        java.util.Objects.requireNonNull(warn, "warn");
+        Map<String, Object> map = new LinkedHashMap<>(source);
+        if (reportDrops) reportUnknown(map, java.util.Set.of("schema", "id", "name", "type", "world", "x", "y", "z",
+                "yaw", "pitch", "lookAtPlayers", "skin", "mirrorSkin", "equipment", "nametag", "appearance", "pose",
+                "baby", "showInTabList", "mobVariant", "owner", "nametagStyle"), "", warn);
+        cleanNumbers(map, java.util.Set.of("schema", "x", "y", "z", "yaw", "pitch"), "", warn);
+        cleanBooleans(map, java.util.Set.of("lookAtPlayers", "mirrorSkin", "baby", "showInTabList"), "", warn);
+        for (String name : List.of("skin", "equipment", "appearance", "mobVariant", "nametagStyle")) {
+            Object value = map.get(name);
+            if (value == null) continue;
+            Map<String, ?> original = section(value);
+            if (original == null) {
+                warn.accept("Dropped unreadable section " + name);
+                map.remove(name);
+                continue;
+            }
+            Map<String, Object> nested = new LinkedHashMap<>(original);
+            switch (name) {
+                case "appearance" -> {
+                    cleanNumbers(nested, java.util.Set.of("scale"), "appearance.", warn);
+                    cleanBooleans(nested, java.util.Set.of("glowing", "invisible", "skinLayers", "collidable", "nametagVisible"), "appearance.", warn);
+                    if (reportDrops) reportUnknown(nested, java.util.Set.of("glowing", "invisible", "skinLayers", "scale", "glowColor",
+                            "collidable", "nametagVisible"), "appearance.", warn);
+                    if (nested.get("scale") instanceof Number scale && scale.doubleValue() < 0.0625) {
+                        warn.accept("Substituted appearance.scale with minimum 0.0625");
+                        nested.put("scale", 0.0625);
+                    }
+                }
+                case "mobVariant" -> {
+                    cleanNumbers(nested, java.util.Set.of("variant", "villagerLevel"), "mobVariant.", warn);
+                    if (reportDrops) reportUnknown(nested, java.util.Set.of("variant", "variantName", "villagerProfession",
+                            "villagerType", "villagerLevel"), "mobVariant.", warn);
+                }
+                case "nametagStyle" -> {
+                    cleanNumbers(nested, java.util.Set.of("background", "textOpacity"), "nametagStyle.", warn);
+                    cleanBooleans(nested, java.util.Set.of("shadow", "seeThrough"), "nametagStyle.", warn);
+                    if (reportDrops) reportUnknown(nested, java.util.Set.of("background", "textOpacity", "shadow", "seeThrough"), "nametagStyle.", warn);
+                }
+                case "skin" -> {
+                    if (nested.get("value") == null) { warn.accept("Dropped skin without value"); nested.clear(); }
+                    if (reportDrops) reportUnknown(nested, java.util.Set.of("value", "signature"), "skin.", warn);
+                }
+                case "equipment" -> nested.entrySet().removeIf(entry -> {
+                    if (section(entry.getValue()) != null) return false;
+                    warn.accept("Dropped unreadable equipment slot " + entry.getKey());
+                    return true;
+                });
+                default -> throw new IllegalStateException(name);
+            }
+            map.put(name, nested);
+        }
+        Object nametag = map.get("nametag");
+        if (nametag != null && !(nametag instanceof List<?>)) {
+            warn.accept("Dropped unreadable nametag lines");
+            map.remove("nametag");
+        } else if (nametag instanceof List<?> lines && lines.stream().anyMatch(line -> !(line instanceof String))) {
+            warn.accept("Converted non-text nametag lines to strings");
+        }
+        return map;
+    }
+
+    private static void reportUnknown(Map<String, Object> map, java.util.Set<String> known, String prefix, Consumer<String> warn) {
+        map.keySet().removeIf(key -> {
+            if (known.contains(key)) return false;
+            warn.accept("Dropped unknown field " + prefix + key);
+            return true;
+        });
+    }
+
+    private static void cleanNumbers(Map<String, Object> map, java.util.Set<String> names, String prefix, Consumer<String> warn) {
+        for (String name : names) {
+            Object value = map.get(name);
+            if (value == null) continue;
+            Number parsed = number(value, Double.NaN);
+            double number = parsed.doubleValue();
+            double limit = name.equals("yaw") || name.equals("pitch") ? Float.MAX_VALUE
+                    : java.util.Set.of("schema", "variant", "villagerLevel", "background", "textOpacity").contains(name)
+                    ? Integer.MAX_VALUE : Double.MAX_VALUE;
+            if (!Double.isFinite(number) || Math.abs(number) > limit) {
+                warn.accept("Substituted invalid number " + prefix + name + " with its default");
+                map.remove(name);
+            } else map.put(name, parsed);
+        }
+    }
+
+    private static void cleanBooleans(Map<String, Object> map, java.util.Set<String> names, String prefix, Consumer<String> warn) {
+        for (String name : names) {
+            Object value = map.get(name);
+            if (value != null && !(value instanceof Boolean) && !"true".equalsIgnoreCase(String.valueOf(value))
+                    && !"false".equalsIgnoreCase(String.valueOf(value))) {
+                warn.accept("Substituted invalid boolean " + prefix + name + " with its default");
+                map.remove(name);
+            }
+        }
     }
 
     private static void putIfNotNull(Map<String, Object> map, String key, Object value) {

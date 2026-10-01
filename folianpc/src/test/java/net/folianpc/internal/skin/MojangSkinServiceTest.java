@@ -177,4 +177,96 @@ class MojangSkinServiceTest {
         String json = "{\"properties\":[{\"name\":\"other\",\"value\":\"V\"}]}";
         assertThrows(IllegalStateException.class, () -> MojangSkinService.parseSkin(json));
     }
+    private java.net.http.HttpResponse<String> response(int status, String body, String retry) {
+        @SuppressWarnings("unchecked")
+        java.net.http.HttpResponse<String> response = org.mockito.Mockito.mock(java.net.http.HttpResponse.class);
+        org.mockito.Mockito.when(response.statusCode()).thenReturn(status);
+        org.mockito.Mockito.when(response.body()).thenReturn(body);
+        org.mockito.Mockito.when(response.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                retry == null ? java.util.Map.of() : java.util.Map.of("Retry-After", java.util.List.of(retry)), (key, value) -> true));
+        return response;
+    }
+
+    @Test
+    void typedOutcomesPreserveRateLimitAndFallbackWithoutRepeatingHttp() {
+        AtomicInteger calls = new AtomicInteger();
+        MojangSkinService service = new MojangSkinService(request -> {
+            calls.incrementAndGet();
+            return CompletableFuture.completedFuture(response(429, "", "60"));
+        });
+        service.failureTtl(Duration.ZERO);
+        UUID id = UUID.randomUUID();
+        for (int attempt = 0; attempt < 3; attempt++) {
+            var result = service.result(service.byId(id)).join();
+            assertEquals(net.folianpc.api.SkinFetchResult.Status.RATE_LIMITED, result.status());
+            assertEquals(Duration.ofSeconds(60), result.retryAfter());
+            Skin fallback = Skin.of("fallback", null);
+            assertEquals(fallback, result.skinOr(fallback));
+        }
+        assertEquals(1, calls.get());
+        service.close();
+    }
+
+    @Test
+    void httpStatusesAndMalformedBodiesHaveDistinctOutcomes() {
+        var statuses = java.util.Map.of(404, net.folianpc.api.SkinFetchResult.Status.NOT_FOUND,
+                204, net.folianpc.api.SkinFetchResult.Status.NOT_FOUND,
+                503, net.folianpc.api.SkinFetchResult.Status.UNAVAILABLE,
+                200, net.folianpc.api.SkinFetchResult.Status.MALFORMED);
+        statuses.forEach((status, expected) -> {
+            MojangSkinService service = new MojangSkinService(request ->
+                    CompletableFuture.completedFuture(response(status, "bad-json", null)));
+            assertEquals(expected, service.result(service.byId(UUID.randomUUID())).join().status());
+            service.close();
+        });
+    }
+
+    @Test
+    void requestConcurrencyAndQueueCapacityAreBoundedAndShutdownCompletesAllObservers() {
+        AtomicInteger started = new AtomicInteger();
+        java.util.List<CompletableFuture<java.net.http.HttpResponse<String>>> transport = new java.util.ArrayList<>();
+        MojangSkinService service = new MojangSkinService(request -> {
+            started.incrementAndGet();
+            var pending = new CompletableFuture<java.net.http.HttpResponse<String>>();
+            transport.add(pending);
+            return pending;
+        });
+        service.limits(100, 2, 2);
+        java.util.List<CompletableFuture<Skin>> observers = new java.util.ArrayList<>();
+        for (int index = 0; index < 4; index++) observers.add(service.byId(UUID.randomUUID()));
+        assertEquals(2, started.get());
+        assertEquals(net.folianpc.api.SkinFetchResult.Status.BUSY,
+                service.result(service.byId(UUID.randomUUID())).join().status());
+        transport.getFirst().complete(response(200, "{\"properties\":[{\"name\":\"textures\",\"value\":\"V\"}]}", null));
+        assertEquals(3, started.get());
+        assertEquals("V", observers.getFirst().join().value());
+        service.close();
+        for (int index = 1; index < observers.size(); index++) {
+            assertEquals(net.folianpc.api.SkinFetchResult.Status.SHUTDOWN, service.result(observers.get(index)).join().status());
+        }
+        assertEquals(net.folianpc.api.SkinFetchResult.Status.SHUTDOWN,
+                service.result(service.byId(UUID.randomUUID())).join().status());
+    }
+
+    @Test
+    void inflightCacheEntriesRemainSharedAndCallerCancellationDoesNotPoisonThem() {
+        MojangSkinService service = new MojangSkinService();
+        service.ttl(Duration.ZERO);
+        service.limits(2, 1, 1);
+        var cache = new ConcurrentHashMap<String, MojangSkinService.Cached>();
+        CompletableFuture<Skin> source = new CompletableFuture<>();
+        AtomicInteger calls = new AtomicInteger();
+        var observer = service.lookup(cache, "a", key -> { calls.incrementAndGet(); return source; });
+        observer.cancel(false);
+        var other = service.lookup(cache, "a", key -> { calls.incrementAndGet(); return source; });
+        assertEquals(1, calls.get());
+        source.complete(Skin.of("V", null));
+        assertEquals("V", other.join().value());
+        for (int index = 0; index < 30; index++) {
+            service.lookup(cache, "entry-" + index, key -> CompletableFuture.completedFuture(Skin.of("V", null))).join();
+            assertTrue(cache.size() <= 2);
+        }
+        service.close();
+    }
+
 }

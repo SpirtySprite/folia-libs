@@ -162,4 +162,28 @@ class AStarTest {
 
         assertEquals(List.of(at(2, 1, 2)), route);
     }
+    @Test
+    void clearanceRejectsTallAndWideBodiesInConfinedSpaces() {
+        Grid grid = new Grid();
+        grid.wall(-8, -8, 8, 8, 3);
+        var options = net.folianpc.api.NavigationOptions.builder().radius(8).build();
+        assertTrue(!AStar.find(grid, at(0, 1, 0), at(4, 1, 0), options, 0.6, 1.8).isEmpty());
+        assertTrue(AStar.find(grid, at(0, 1, 0), at(4, 1, 0), options, 0.6, 2.9).isEmpty());
+        grid.wall(-8, 1, 8, 1, 1);
+        grid.wall(-8, -1, 8, -1, 1);
+        assertTrue(AStar.find(grid, at(0, 1, 0), at(4, 1, 0), options, 2, 1.8).isEmpty());
+    }
+
+    @Test
+    void groundFollowingResolvesLandingHeightWithoutChangingStraightTargetRules() {
+        Grid grid = new Grid();
+        RoutePlanner planner = new RoutePlanner();
+        var follow = net.folianpc.api.NavigationOptions.builder().radius(8).groundFollowing(true).build();
+        var route = planner.route(grid, 0.5, 1, 0.5, 4.5, 2, 0.5, follow, 0.6, 1.8);
+        assertTrue(!route.isEmpty());
+        assertEquals(1, route.getLast()[1]);
+        assertTrue(planner.route(grid, 0.5, 1, 0.5, 4.5, 2, 0.5,
+                net.folianpc.api.NavigationOptions.builder().radius(8).build(), 0.6, 1.8).isEmpty());
+    }
+
 }

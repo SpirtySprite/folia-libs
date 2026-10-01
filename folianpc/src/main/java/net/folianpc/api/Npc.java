@@ -152,6 +152,35 @@ public interface Npc {
         return resetVisibility(player.getUniqueId());
     }
 
+    /** Groups appearance mutations into one coherent presentation update. Completed mutations remain applied if the callback throws. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default Npc batch(java.util.function.Consumer<Npc> updates) {
+        java.util.Objects.requireNonNull(updates, "updates").accept(this);
+        return this;
+    }
+
+    /** Sets spacing and offset for hologram lines. Safe from any thread. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default Npc nametagLayout(NametagLayout layout) {
+        throw new UnsupportedOperationException("Nametag layout is unavailable in this implementation");
+    }
+
+    /** Returns the current hologram placement rules. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default NametagLayout nametagLayout() { return NametagLayout.defaults(); }
+
+    /** Installs copied overrides for one viewer, including future shows. Cleared on player disconnect. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default Npc appearanceFor(UUID viewer, ViewerAppearance appearance) {
+        throw new UnsupportedOperationException("Viewer appearance is unavailable in this implementation");
+    }
+
+    /** Restores inherited appearance and equipment for one viewer. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default Npc clearAppearanceFor(UUID viewer) {
+        throw new UnsupportedOperationException("Viewer appearance is unavailable in this implementation");
+    }
+
     NpcAppearance appearance();
 
     Npc appearance(NpcAppearance appearance);
@@ -169,6 +198,16 @@ public interface Npc {
     Npc skin(Skin skin);
 
     Skin skin();
+
+    /**
+     * Applies a skin only while this is the newest skin request and the NPC remains live. A direct skin or
+     * mirror choice supersedes pending requests. Cancelling the returned observer does not cancel fetching.
+     * Safe from any thread; failures complete with FAILED and retain their cause.
+     */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default java.util.concurrent.CompletableFuture<SkinApplyResult> skinAsync(java.util.concurrent.CompletionStage<Skin> skin) {
+        throw new UnsupportedOperationException("Asynchronous skin application is unavailable in this implementation");
+    }
 
     Npc mirrorSkin(boolean enabled);
 
@@ -205,6 +244,18 @@ public interface Npc {
     @org.jetbrains.annotations.ApiStatus.Experimental
     default MovementTask navigateTo(org.bukkit.Location target, double blocksPerSecond, NavigationOptions options) {
         throw new UnsupportedOperationException("Snapshot navigation is unavailable in this implementation");
+    }
+
+    /** Starts a copied waypoint patrol, replacing existing movement. Failure at any waypoint ends the behavior. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default BehaviorTask patrol(java.util.List<org.bukkit.Location> waypoints, PatrolOptions options) {
+        throw new UnsupportedOperationException("Patrol is unavailable in this implementation");
+    }
+
+    /** Follows a tracked player, resolving target locations on that player's owning thread. Disconnect cancels following. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default BehaviorTask follow(UUID player, FollowOptions options) {
+        throw new UnsupportedOperationException("Following is unavailable in this implementation");
     }
 
     Npc stopWalking();

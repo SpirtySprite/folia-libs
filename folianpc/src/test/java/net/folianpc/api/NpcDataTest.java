@@ -220,4 +220,32 @@ class NpcDataTest {
         assertTrue(data.equipment().isEmpty());
         assertFalse(warnings.isEmpty());
     }
+    @Test
+    void migrationReportsDroppedFieldsAndFiniteFallbacksWithoutChangingInput() {
+        Map<String, Object> saved = new java.util.LinkedHashMap<>();
+        saved.put("schema", NpcDataCodec.SCHEMA + 1);
+        saved.put("futureFeature", true);
+        saved.put("type", "SPACE_CRAB");
+        saved.put("x", Double.NaN);
+        saved.put("yaw", Double.MAX_VALUE);
+        saved.put("appearance", Map.of("scale", Double.POSITIVE_INFINITY, "collidable", "invalid", "unknown", true));
+        saved.put("equipment", Map.of("HAND", "invalid"));
+        saved.put("nametag", "invalid");
+        var result = NpcData.deserializeWithReport(saved);
+        assertEquals(org.bukkit.entity.EntityType.PLAYER, result.data().type());
+        assertEquals(0, result.data().x());
+        assertEquals(0, result.data().yaw());
+        assertEquals(1, result.data().appearance().scale());
+        assertTrue(result.data().appearance().collidable());
+        assertTrue(result.warnings().stream().anyMatch(message -> message.contains("futureFeature")));
+        assertTrue(result.warnings().stream().anyMatch(message -> message.contains("schema")));
+        assertTrue(result.warnings().stream().anyMatch(message -> message.contains("appearance.unknown")));
+        assertTrue(result.warnings().stream().anyMatch(message -> message.contains("equipment")));
+        assertTrue(result.warnings().stream().anyMatch(message -> message.contains("nametag")));
+        assertTrue(saved.containsKey("futureFeature"));
+        org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException.class, () -> result.warnings().add("changed"));
+        assertEquals(0, NpcData.deserialize(Map.of("x", Double.NaN)).x());
+        assertTrue(NpcData.deserializeWithReport(Map.of()).warnings().stream().anyMatch(message -> message.contains("Missing schema")));
+    }
+
 }

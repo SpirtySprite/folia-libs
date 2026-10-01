@@ -58,12 +58,29 @@ public final class RoutePlanner {
         AStar.Node previous = null;
         for (AStar.Node node : path) {
             if (previous != null && node.y() > previous.y()) {
+                waypoints.add(new double[]{previous.x() + 0.5, node.y() + JUMP_ARC_HEIGHT, previous.z() + 0.5});
                 waypoints.add(arcPeak(previous, node));
+            } else if (previous != null && node.y() < previous.y()) {
+                waypoints.add(new double[]{node.x() + 0.5, previous.y(), node.z() + 0.5});
             }
             waypoints.add(new double[]{node.x() + 0.5, node.y(), node.z() + 0.5});
             previous = node;
         }
         waypoints.set(waypoints.size() - 1, new double[]{toX, toY, toZ});
+        double[] last = new double[]{fromX, fromY, fromZ};
+        for (double[] next : waypoints) {
+            double distance = Math.max(Math.abs(next[0] - last[0]),
+                    Math.max(Math.abs(next[1] - last[1]), Math.abs(next[2] - last[2])));
+            int samples = Math.max(1, (int) Math.ceil(distance / 0.1));
+            for (int sample = 0; sample <= samples; sample++) {
+                double fraction = (double) sample / samples;
+                if (!AStar.bodyClear(sampler, last[0] + (next[0] - last[0]) * fraction,
+                        last[1] + (next[1] - last[1]) * fraction, last[2] + (next[2] - last[2]) * fraction, width, height)) {
+                    return List.of();
+                }
+            }
+            last = next;
+        }
         return waypoints;
     }
 

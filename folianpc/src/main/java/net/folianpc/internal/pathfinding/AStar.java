@@ -147,7 +147,7 @@ public final class AStar {
         return bodyClear(world, x, y, z, width, height);
     }
 
-    private static boolean bodyClear(WorldSampler world, double x, double y, double z, double width, double height) {
+    public static boolean bodyClear(WorldSampler world, double x, double y, double z, double width, double height) {
         for (int xx = (int) Math.floor(x - width / 2); xx <= (int) Math.floor(x + width / 2 - 1e-7); xx++) {
             for (int zz = (int) Math.floor(z - width / 2); zz <= (int) Math.floor(z + width / 2 - 1e-7); zz++) {
                 for (int yy = (int) Math.floor(y); yy <= (int) Math.floor(y + height - 1e-7); yy++) {

@@ -216,6 +216,26 @@ Visibility predicates execute on each viewer's owning thread. Only tracked playe
 an NPC can interact with it, and stale entity IDs do not invoke handlers. Hysteresis defaults to zero;
 a positive margin extends the hide range only after a player has entered the normal view range.
 
+### Patrol and follow
+
+```java
+PatrolOptions patrolOptions = new PatrolOptions(4.0, 40, true,
+        NavigationOptions.builder().radius(32).groundFollowing(true).build());
+BehaviorTask patrol = npc.patrol(List.of(firstWaypoint, secondWaypoint), patrolOptions);
+patrol.result().thenAccept(outcome -> plugin.getLogger().info(outcome.status().name()));
+patrol.cancel();
+BehaviorTask follow = npc.follow(player.getUniqueId(), new FollowOptions(4, 2, 48, 10,
+        NavigationOptions.builder().radius(64).build()));
+follow.close();
+```
+
+Patrol copies every waypoint, waits the configured server ticks after arrival, and optionally repeats.
+Follow resolves the tracked player's location on its owning thread, holds inside `minDistance`, and
+checks for a changed target after `repathTicks`. Leaving `maxDistance`, changing worlds or an
+unreachable route ends following; disconnect cancels it. Manual navigation, straight walking,
+teleportation, stop, removal and shutdown terminate the current behavior. Type, pose, baby state and
+scale changes supersede navigation because its captured clearance no longer describes the NPC.
+
 ## Visibility range
 
 An NPC is shown to players within range (48 blocks by default) in the *same world* and hidden again the
@@ -413,6 +433,35 @@ the moment they're shown the NPC — there is **no network fetch and no caching 
 `fetchSkin`. The static skin set with `npc.skin(...)` is retained underneath and comes back immediately
 for every viewer as soon as mirroring is turned back off; the two are not mutually destructive. Mirroring
 only applies to `PLAYER`-type NPCs, same restriction as static skins.
+
+### Bounded skin fetching and ordered application
+
+```java
+api.skinCacheLimits(1024, 4, 256);
+api.fetchSkinResult("Steve").thenAccept(outcome -> {
+    Skin chosen = outcome.skinOr(fallbackSkin);
+    plugin.getLogger().info(outcome.status() + ", retry after " + outcome.retryAfter());
+});
+npc.skinAsync(api.fetchSkin(player.getUniqueId())).thenAccept(applied ->
+        plugin.getLogger().info(applied.status().name()));
+```
+
+`fetchSkinResult` accepts either a name or UUID; `fetchSkinFromUrlResult` reports URL generation in
+the same format. Results distinguish `FOUND`, `NOT_FOUND`, `RATE_LIMITED`, `MALFORMED`, `UNAVAILABLE`,
+`BUSY` and `SHUTDOWN`. `skinOr` supplies a caller-selected fallback without hiding the outcome.
+`Retry-After` guidance extends the failure cooldown, with a maximum of one day. The existing fetch
+methods still complete exceptionally on failure and remain supported.
+
+Each name, UUID and URL cache defaults to 1024 entries. Expired entries are pruned and completed
+entries can be evicted at capacity. In-flight entries remain shared even if their TTL has elapsed;
+TTL begins on completion. Default network limits allow four active requests and 256 queued requests.
+Saturation returns `BUSY`; shutdown completes pending requests. Cancelling a caller's future does not
+poison a shared cache entry. Reducing limits allows existing work to finish before admitting new work.
+
+`skinAsync` applies only the newest request while the NPC remains live. A direct skin or mirror
+choice supersedes pending application, even when its value is unchanged. Application results report
+`APPLIED`, `SUPERSEDED`, `REMOVED`, `SHUTDOWN` or `FAILED`, with a cause for failure. It does not cancel
+shared fetching when an application becomes obsolete.
 
 ## Nametags
 
@@ -666,6 +715,31 @@ not assumed portable. A value that doesn't fit its declared `MetadataType` (e.g.
 *wrong* value at a plausible-looking index will not be caught — verify visually in-game after using this,
 on every Minecraft version you support.
 
+### Batched and viewer-specific presentation
+
+```java
+npc.batch(target -> target.name("Guide").glowing(true).scale(1.2)
+        .equipment(EquipmentSlot.HAND, compass));
+npc.nametagLayout(new NametagLayout(0.32, 0.4, true));
+ViewerAppearance quest = ViewerAppearance.builder()
+        .appearance(new NpcAppearance(true, false, true, 1.0, NamedTextColor.GOLD, true, false))
+        .equipment(EquipmentSlot.HAND, questItem).build();
+npc.appearanceFor(player.getUniqueId(), quest);
+npc.clearAppearanceFor(player.getUniqueId());
+```
+
+Nested batches flush at the outermost boundary. Unchanged appearance setters do not send packets.
+A batch combines metadata, scale, equipment and nametag updates, or sends one respawn if a change
+requires it. If its callback throws, completed mutations are retained and flushed, then the exception
+propagates. Use batches for presentation changes; movement and action callbacks keep their normal
+behavior. Entity-relative nametags follow conservative type height, pose, baby state and scale.
+Set `entityRelative` to false for a fixed offset from the NPC's feet.
+
+Viewer overrides inherit unspecified equipment slots; an air item clears an inherited slot. They
+never mutate shared appearance or equipment and are cleared when the player disconnects. Layout,
+hysteresis, behaviors and viewer overrides are runtime settings and are not included in `NpcData`.
+Text placeholders continue to resolve independently for each viewer.
+
 ## Equipment
 
 ```java
@@ -859,6 +933,22 @@ is **purely informational**: FoliaNPC itself never reads this value for any perm
 logic, or anything else internally. It exists solely so you can build your own permission checks on top
 of it (e.g. "only the owner or a server admin may edit this NPC"), without having to maintain a separate
 side-table mapping NPC id to creator yourself.
+
+### Loading with migration reports
+
+```java
+NpcDataReadResult decoded = NpcData.deserializeWithReport(savedMap);
+decoded.warnings().forEach(plugin.getLogger()::warning);
+NpcLoadResult loaded = api.load(savedMap);
+loaded.warnings().forEach(plugin.getLogger()::warning);
+Npc restored = loaded.npc();
+```
+
+The report retains schema assumptions, unknown fields, malformed sections and substituted values,
+including invalid enums, equipment and nonfinite numbers. It does not mutate the input map.
+`NpcDataCodec.fromMapWithReport` exposes the same report for codec callers. Existing tolerant
+`deserialize` and `fromMap` calls continue to work; duplicate loaded UUIDs are rejected explicitly.
+Reports are immutable and loading performs no file access.
 
 ## Diagnostics
 

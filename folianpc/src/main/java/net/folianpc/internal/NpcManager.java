@@ -153,6 +153,7 @@ public final class NpcManager {
         NpcSnapshot snapshot = npc.snapshot();
         int[] lineIds = npc.nametagIds();
         Schedulers.onEntity(plugin, viewer, () -> {
+            if (!npc.removed() && npc.viewers().contains(viewer.getUniqueId())) return;
             backend.hide(viewer, snapshot);
             if (lineIds.length > 0) {
                 backend.removeEntities(viewer, lineIds);
@@ -166,6 +167,19 @@ public final class NpcManager {
             backend.hide(viewer, snapshot);
             backend.show(viewer, snapshot);
         });
+    }
+
+    public void refreshViewer(NpcImpl npc, UUID viewerId) {
+        PlayerTracker.Tracked tracked = tracker.get(viewerId);
+        if (tracked != null) {
+            Schedulers.onEntity(plugin, tracked.player(), () -> {
+                if (!closed && !npc.removed() && npc.viewers().contains(viewerId)) {
+                    NpcSnapshot snapshot = npc.snapshot(viewerId);
+                    backend.hide(tracked.player(), snapshot);
+                    backend.show(tracked.player(), snapshot);
+                }
+            });
+        }
     }
 
     public void updateMeta(NpcImpl npc) {
@@ -300,7 +314,7 @@ public final class NpcManager {
         }
         boolean show = npc.viewers().add(viewerId);
         if (show || reposition) {
-            NpcSnapshot snapshot = npc.snapshot();
+            NpcSnapshot snapshot = npc.snapshot(viewerId);
             if (reposition) {
                 backend.removeEntities(viewer, npc.nametagIds());
                 backend.hide(viewer, snapshot);
@@ -322,6 +336,17 @@ public final class NpcManager {
                 outcome.status() == MovementResult.Status.FAILED
                         ? CompletableFuture.failedFuture(outcome.failure().orElseThrow())
                         : CompletableFuture.completedFuture(outcome.status() == MovementResult.Status.ROUTE_FOUND));
+    }
+
+    CompletableFuture<Location> followDestination(UUID target) {
+        PlayerTracker.Tracked tracked = tracker.get(target);
+        if (tracked == null || closed) return CompletableFuture.completedFuture(null);
+        var scheduler = Schedulers.scheduler(plugin);
+        if (scheduler == null) return CompletableFuture.completedFuture(null);
+        return scheduler.callForEntity(tracked.player(), () -> {
+            PlayerTracker.Tracked current = tracker.get(target);
+            return current == null || current.player() != tracked.player() ? null : tracked.player().getLocation().clone();
+        });
     }
 
     public MovementRequest navigate(NpcImpl npc, Location target, double speed, NavigationOptions options) {
@@ -395,7 +420,7 @@ public final class NpcManager {
                 Player viewer = tracked.player();
                 Schedulers.onEntity(plugin, viewer, () -> {
                     if (!closed && !npc.removed() && npc.viewers().contains(viewerId)) {
-                        action.accept(viewer, npc.snapshot());
+                        action.accept(viewer, npc.snapshot(viewerId));
                     }
                 });
             }
@@ -439,6 +464,7 @@ public final class NpcManager {
     }
 
     private void tick(NpcImpl npc) {
+        npc.tickBehavior();
         if (npc.moving()) {
             long generation = npc.movementGeneration();
             double[] delta = npc.stepWalk(SECONDS_PER_PASS);
@@ -557,7 +583,7 @@ public final class NpcManager {
         }
         NpcInteractEvent event = new NpcInteractEvent(viewer, npc, type, sneaking);
         events.accept(event);
-        if (event.isCancelled()) {
+        if (event.isCancelled() || closed || npc.removed()) {
             return;
         }
         NpcClickListener listener = npc.clickListener();

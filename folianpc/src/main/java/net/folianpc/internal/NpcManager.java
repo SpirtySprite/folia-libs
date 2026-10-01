@@ -41,6 +41,9 @@ public final class NpcManager {
     private final ConcurrentHashMap<UUID, NpcImpl> byId = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, NpcImpl> byEntityId = new ConcurrentHashMap<>();
 
+    private record SentPosition(String world, double x, double y, double z) { }
+    private final Map<UUID, Map<Integer, SentPosition>> sentPositions = new ConcurrentHashMap<>();
+
     private final Object lifecycle = new Object();
     private volatile boolean closed;
 
@@ -144,6 +147,7 @@ public final class NpcManager {
     }
 
     public void forgetPlayer(UUID playerId) {
+        sentPositions.remove(playerId);
         for (NpcImpl npc : byId.values()) {
             npc.forget(playerId);
         }
@@ -154,18 +158,18 @@ public final class NpcManager {
         int[] lineIds = npc.nametagIds();
         Schedulers.onEntity(plugin, viewer, () -> {
             if (!npc.removed() && npc.viewers().contains(viewer.getUniqueId())) return;
-            backend.hide(viewer, snapshot);
+            hide(viewer, snapshot);
             if (lineIds.length > 0) {
-                backend.removeEntities(viewer, lineIds);
+                removeEntities(viewer, lineIds);
             }
         });
     }
 
     public void refresh(NpcImpl npc, int[] staleLineIds) {
         forEachViewer(npc, (viewer, snapshot) -> {
-            backend.removeEntities(viewer, staleLineIds);
-            backend.hide(viewer, snapshot);
-            backend.show(viewer, snapshot);
+            removeEntities(viewer, staleLineIds);
+            hide(viewer, snapshot);
+            show(viewer, snapshot);
         });
     }
 
@@ -175,9 +179,9 @@ public final class NpcManager {
             Schedulers.onEntity(plugin, tracked.player(), () -> {
                 if (!closed && !npc.removed() && npc.viewers().contains(viewerId)) {
                     NpcSnapshot snapshot = npc.snapshot(viewerId);
-                    backend.removeEntities(tracked.player(), npc.nametagIds());
-                    backend.hide(tracked.player(), snapshot);
-                    backend.show(tracked.player(), snapshot);
+                    removeEntities(tracked.player(), npc.nametagIds());
+                    hide(tracked.player(), snapshot);
+                    show(tracked.player(), snapshot);
                 }
             });
         }
@@ -202,7 +206,21 @@ public final class NpcManager {
     }
 
     public void updateNametag(NpcImpl npc) {
-        forEachViewer(npc, backend::refreshHologram);
+        forEachViewer(npc, (viewer, snapshot) -> {
+            Map<Integer, SentPosition> positions = sentPositions.get(viewer.getUniqueId());
+            if (positions == null) return;
+            if (snapshot.hologram().stream().anyMatch(line -> needsRespawn(positions.get(line.entityId()),
+                    snapshot.world(), line.x(), line.y(), line.z()))) {
+                hide(viewer, snapshot);
+                removeEntities(viewer, npc.nametagIds());
+                show(viewer, snapshot);
+            } else {
+                for (HologramLine line : snapshot.hologram()) {
+                    moveTo(viewer, positions, line.entityId(), snapshot.world(), line.x(), line.y(), line.z());
+                }
+                backend.refreshHologram(viewer, snapshot);
+            }
+        });
     }
 
     public void animate(NpcImpl npc, int action) {
@@ -313,8 +331,8 @@ public final class NpcManager {
         if (!visible) {
             if (npc.viewers().remove(viewerId)) {
                 npc.forgetLook(viewerId);
-                backend.hide(viewer, npc.snapshot());
-                backend.removeEntities(viewer, npc.nametagIds());
+                hide(viewer, npc.snapshot());
+                removeEntities(viewer, npc.nametagIds());
             }
             return;
         }
@@ -322,11 +340,11 @@ public final class NpcManager {
         if (show || reposition) {
             NpcSnapshot snapshot = npc.snapshot(viewerId);
             if (reposition) {
-                backend.removeEntities(viewer, npc.nametagIds());
-                backend.hide(viewer, snapshot);
+                removeEntities(viewer, npc.nametagIds());
+                hide(viewer, snapshot);
                 npc.forgetLook(viewerId);
             }
-            backend.show(viewer, snapshot);
+            show(viewer, snapshot);
             if (show) log("shown '" + npc.name() + "' (id=" + npc.entityId() + ") to " + viewer.getName());
         }
         if (npc.lookAtPlayers() && !npc.moving()) {
@@ -399,22 +417,70 @@ public final class NpcManager {
         return request;
     }
 
-    private void walkStep(NpcImpl npc, double[] delta, long generation) {
+    private void show(Player viewer, NpcSnapshot snapshot) {
+        backend.show(viewer, snapshot);
+        Map<Integer, SentPosition> positions = sentPositions.computeIfAbsent(viewer.getUniqueId(),
+                ignored -> new ConcurrentHashMap<>());
+        positions.put(snapshot.entityId(), new SentPosition(snapshot.world(), snapshot.x(), snapshot.y(), snapshot.z()));
+        for (HologramLine line : snapshot.hologram()) {
+            positions.put(line.entityId(), new SentPosition(snapshot.world(), line.x(), line.y(), line.z()));
+        }
+    }
+
+    private void hide(Player viewer, NpcSnapshot snapshot) {
+        backend.hide(viewer, snapshot);
+        Map<Integer, SentPosition> positions = sentPositions.get(viewer.getUniqueId());
+        if (positions != null) positions.remove(snapshot.entityId());
+    }
+
+    private void removeEntities(Player viewer, int[] ids) {
+        backend.removeEntities(viewer, ids);
+        Map<Integer, SentPosition> positions = sentPositions.get(viewer.getUniqueId());
+        if (positions != null) for (int id : ids) positions.remove(id);
+    }
+
+    private static boolean needsRespawn(SentPosition previous, String world, double x, double y, double z) {
+        return previous == null || !previous.world().equals(world) || Math.abs(x - previous.x()) >= 8
+                || Math.abs(y - previous.y()) >= 8 || Math.abs(z - previous.z()) >= 8;
+    }
+
+    private void moveTo(Player viewer, Map<Integer, SentPosition> positions, int entityId,
+                        String world, double x, double y, double z) {
+        SentPosition previous = positions.get(entityId);
+        if (previous == null) return;
+        double dx = x - previous.x();
+        double dy = y - previous.y();
+        double dz = z - previous.z();
+        if (dx != 0 || dy != 0 || dz != 0) {
+            backend.move(viewer, entityId, dx, dy, dz);
+            positions.put(entityId, new SentPosition(world, x, y, z));
+        }
+    }
+
+    private void walkStep(NpcImpl npc) {
         forEachViewer(npc, (viewer, snapshot) -> {
-            if (npc.movementGeneration() != generation) {
-                return;
-            }
-            backend.move(viewer, snapshot.entityId(), delta[0], delta[1], delta[2]);
-            for (HologramLine line : snapshot.hologram()) {
-                backend.move(viewer, line.entityId(), delta[0], delta[1], delta[2]);
-            }
-            if (npc.lookChanged(viewer.getUniqueId(), snapshot.yaw(), snapshot.pitch())) {
-                backend.look(viewer, snapshot.entityId(), snapshot.yaw(), snapshot.pitch());
+            Map<Integer, SentPosition> positions = sentPositions.get(viewer.getUniqueId());
+            if (positions == null) return;
+            if (needsRespawn(positions.get(snapshot.entityId()), snapshot.world(), snapshot.x(), snapshot.y(), snapshot.z())
+                    || snapshot.hologram().stream().anyMatch(line -> needsRespawn(positions.get(line.entityId()),
+                    snapshot.world(), line.x(), line.y(), line.z()))) {
+                hide(viewer, snapshot);
+                removeEntities(viewer, npc.nametagIds());
+                show(viewer, snapshot);
+            } else {
+                moveTo(viewer, positions, snapshot.entityId(), snapshot.world(), snapshot.x(), snapshot.y(), snapshot.z());
+                for (HologramLine line : snapshot.hologram()) {
+                    moveTo(viewer, positions, line.entityId(), snapshot.world(), line.x(), line.y(), line.z());
+                }
+                if (npc.lookChanged(viewer.getUniqueId(), snapshot.yaw(), snapshot.pitch())) {
+                    backend.look(viewer, snapshot.entityId(), snapshot.yaw(), snapshot.pitch());
+                }
             }
         });
     }
 
     public void dropPlayer(UUID playerId) {
+        sentPositions.remove(playerId);
         for (NpcImpl npc : byId.values()) {
             npc.forget(playerId);
             npc.dropVisibility(playerId);
@@ -474,10 +540,9 @@ public final class NpcManager {
     private void tick(NpcImpl npc) {
         npc.tickBehavior();
         if (npc.moving()) {
-            long generation = npc.movementGeneration();
             double[] delta = npc.stepWalk(SECONDS_PER_PASS);
             if (delta != null) {
-                walkStep(npc, delta, generation);
+                walkStep(npc);
             }
         }
         if (npc.dueForNametagRefresh()) {
@@ -657,13 +722,14 @@ public final class NpcManager {
             }
             npc.viewers().clear();
         }
+        sentPositions.clear();
     }
 
     private void hideNow(Player viewer, NpcSnapshot snapshot, int[] lineIds) {
         try {
-            backend.hide(viewer, snapshot);
+            hide(viewer, snapshot);
             if (lineIds.length > 0) {
-                backend.removeEntities(viewer, lineIds);
+                removeEntities(viewer, lineIds);
             }
         } catch (RuntimeException failure) {
             log("could not hide '" + snapshot.name() + "' from " + viewer.getName() + " on close: " + failure);

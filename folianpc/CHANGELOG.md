@@ -15,6 +15,8 @@ All notable changes to FoliaNPC are documented here. The format follows
 - Visibility hysteresis for existing viewers.
 
 ### Fixed
+- Arrival callbacks retain committed viewer movement; queued updates reconcile against the last sent position.
+- Existing nametag displays reposition after layout, scale, pose and baby changes, including large offsets.
 - Appearance recipes and text-only nametag edits use partial updates; removing equipment sends explicit empty slots.
 - Pending navigation completes on cancellation, replacement, removal, shutdown and search failure.
 - Visibility predicates and viewer updates run on player ownership threads; hidden and stale clicks are rejected.

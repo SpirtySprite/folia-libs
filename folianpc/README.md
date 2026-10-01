@@ -198,7 +198,9 @@ npc.visibilityHysteresis(3.0);
 
 `route()` distinguishes route installation from failure; `result()` observes arrival, cancellation,
 replacement, removal or shutdown. Cancelling an observer future does not cancel travel; cancel the
-`MovementTask` itself. The previous two-argument `navigateTo` remains available but is deprecated:
+`MovementTask` itself. Arrival callbacks may stop or replace movement; viewer updates retain the
+committed position and reconcile queued work against the last position sent to each viewer.
+The previous two-argument `navigateTo` remains available but is deprecated:
 its boolean reports route installation only and retains the existing solid-ground terrain policy. `walkTo` continues to use straight-line movement.
 
 Searches use immutable snapshots captured on each chunk's owning region and do not read live blocks
@@ -722,6 +724,8 @@ A batch combines metadata, scale, equipment and nametag updates, or sends one re
 requires it. If its callback throws, completed mutations are retained and flushed, then the exception
 propagates. Use batches for presentation changes; movement and action callbacks keep their normal
 behavior. Entity-relative nametags follow registered type height, supported poses, baby state and scale.
+Existing viewers receive display position updates when layout, pose, baby state or scale changes.
+Offsets beyond the relative packet range recreate the presentation at its current position.
 Set `entityRelative` to false for a fixed offset from the NPC's feet.
 
 Viewer overrides inherit unspecified equipment slots; an air item clears an inherited slot. They

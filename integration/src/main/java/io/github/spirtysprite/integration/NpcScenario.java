@@ -98,7 +98,10 @@ final class NpcScenario {
                                     held.completeExceptionally(new IllegalStateException("Registered mob clearance: " + bear.status()));
                                 } else {
                                     npc.remove();
-                                    held.complete("NPC snapshot navigation across chunk boundaries, registered mob clearance, patrol, follow, viewer ownership and appearance overrides passed");
+                                    reviewPresentation(service, scheduler, start, options).whenComplete((review, reviewFailure) -> {
+                                        if (reviewFailure != null) held.completeExceptionally(reviewFailure);
+                                        else held.complete("NPC snapshot navigation, behavior, viewer ownership, arrival continuation and nametag position checks passed");
+                                    });
                                 }
                             });
                         } catch (RuntimeException failure) { held.completeExceptionally(failure); }
@@ -110,6 +113,37 @@ final class NpcScenario {
                 return completed;
             });
         });
+    }
+
+    private static CompletableFuture<Void> reviewPresentation(FoliaNpc service, Scheduler scheduler,
+                                                               Location start, NavigationOptions options) {
+        Npc review = service.spawn(net.folianpc.api.NpcData.builder()
+                .id(java.util.UUID.fromString("00000000-0000-0000-0000-000000000018"))
+                .name("ReviewNpc").position(start.getWorld().getName(), start.getX(), start.getY(), start.getZ(), 0, 0)
+                .nametag(List.of("Review label")).build());
+        review.viewDistance(512);
+        CompletableFuture<Void> result = after(scheduler, () -> review.nametagLayout(new NametagLayout(0.28, 1.25, true)))
+                .thenCompose(ignored -> after(scheduler, () -> { }))
+                .thenCompose(ignored -> {
+                    var task = review.navigateTo(start.clone().add(0.25, 0, 0), 8, options);
+                    return task.result().thenCompose(arrival -> {
+                        require(arrival.status() == MovementResult.Status.ARRIVED, "Arrival review failed: " + arrival.status());
+                        review.stopWalking();
+                        return after(scheduler, () -> { });
+                    });
+                });
+        result.whenComplete((ignored, failure) -> { if (!review.removed()) review.remove(); });
+        return result;
+    }
+
+    private static CompletableFuture<Void> after(Scheduler scheduler, Runnable action) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        var task = scheduler.scheduleGlobalLater(() -> {
+            try { action.run(); result.complete(null); }
+            catch (RuntimeException failure) { result.completeExceptionally(failure); }
+        }, 8);
+        if (task.isCancelled()) result.completeExceptionally(new IllegalStateException("Presentation check dispatch refused"));
+        return result;
     }
 
     private static void require(boolean value, String message) {

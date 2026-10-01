@@ -1996,4 +1996,125 @@ class NpcManagerTest {
         assertEquals(0.5, npc.dimensions(net.folianpc.api.NavigationOptions.builder().dimensions(0.5, 0.75).build())[0]);
     }
 
+    @Test
+    void arrivalCallbacksKeepCommittedMovementWhenStoppingOrStartingAnotherRoute() {
+        for (int mode = 0; mode < 3; mode++) {
+            NpcImpl npc = manager.create("Arrival", new Position("world", 0, 64, 0, 0, 0));
+            Player viewer = player(UUID.randomUUID());
+            track(viewer, "world", 0, 64, 1);
+            manager.tick();
+            var request = npc.beginMovement();
+            npc.installRoute(request, List.of(new double[]{0.2, 64, 0}), 4);
+            int action = mode;
+            request.result().thenRun(() -> {
+                if (action == 0) npc.stopWalking();
+                else if (action == 1) npc.walkToward(1, 64, 0, 4);
+                else {
+                    var replacement = npc.beginMovement();
+                    npc.installRoute(replacement, List.of(new double[]{1, 64, 0}), 4);
+                }
+            });
+            manager.tick();
+            assertEquals(net.folianpc.api.MovementResult.Status.ARRIVED, request.result().join().status());
+            assertEquals(0.2, backend.moves.stream().filter(move -> move.viewer() == viewer
+                    && move.entityId() == npc.entityId()).mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+            if (mode > 0) {
+                manager.tick();
+                assertEquals(npc.x(), backend.moves.stream().filter(move -> move.viewer() == viewer
+                        && move.entityId() == npc.entityId()).mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+            }
+            npc.remove();
+            tracker.remove(viewer.getUniqueId());
+        }
+    }
+
+    @Test
+    void queuedMovementCoalescesAgainstThePositionAlreadySentToEachViewer() {
+        NpcImpl npc = manager.create("Queued", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        List<Runnable> queued = new ArrayList<>();
+        try (var schedulers = org.mockito.Mockito.mockStatic(Schedulers.class)) {
+            schedulers.when(() -> Schedulers.onEntity(org.mockito.ArgumentMatchers.any(Plugin.class),
+                    org.mockito.ArgumentMatchers.any(org.bukkit.entity.Entity.class),
+                    org.mockito.ArgumentMatchers.any(Runnable.class))).thenAnswer(call -> {
+                queued.add(call.getArgument(2));
+                return null;
+            });
+            var request = npc.beginMovement();
+            npc.installRoute(request, List.of(new double[]{0.6, 64, 0}), 4);
+            request.result().thenRun(npc::stopWalking);
+            manager.tick();
+            manager.tick();
+            assertTrue(backend.moves.isEmpty());
+            List.copyOf(queued).forEach(Runnable::run);
+        }
+        assertEquals(0.6, npc.x(), 1e-6);
+        assertEquals(0.6, backend.moves.stream().filter(move -> move.entityId() == npc.entityId())
+                .mapToDouble(RecordingProtocolBackend.Move::dx).sum(), 1e-6);
+    }
+
+    @Test
+    void arrivalTeleportResetsTheViewerBaselineBeforeFurtherMovement() {
+        NpcImpl npc = manager.create("Teleport", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        manager.tick();
+        var request = npc.beginMovement();
+        npc.installRoute(request, List.of(new double[]{0.2, 64, 0}), 4);
+        request.result().thenRun(() -> npc.teleportTo(new Position("world", 3, 64, 0, 0, 0)));
+        manager.tick();
+        assertTrue(backend.moves.isEmpty());
+        assertEquals(3, backend.shows.getLast().npc().x());
+        npc.walkToward(4, 64, 0, 4);
+        manager.tick();
+        assertEquals(0.4, backend.moves.getLast().dx(), 1e-6);
+    }
+
+    @Test
+    void existingNametagDisplaysMoveForLayoutAndBodyHeightChanges() {
+        NpcImpl npc = manager.create("Layout", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("upper", "lower"));
+        manager.tick();
+        int[] ids = npc.nametagIds();
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.5, 0.75, true));
+        assertEquals(0.72, backend.moves.stream().filter(move -> move.entityId() == ids[0])
+                .mapToDouble(RecordingProtocolBackend.Move::dy).sum(), 1e-6);
+        assertEquals(0.5, backend.moves.stream().filter(move -> move.entityId() == ids[1])
+                .mapToDouble(RecordingProtocolBackend.Move::dy).sum(), 1e-6);
+        backend.moves.clear();
+        npc.pose(NpcPose.SWIMMING);
+        assertEquals(-1.2, backend.moves.getLast().dy(), 1e-6);
+        backend.moves.clear();
+        npc.scale(2);
+        assertEquals(0.6, backend.moves.getLast().dy(), 1e-6);
+        npc.type(EntityType.VILLAGER).pose(NpcPose.STANDING);
+        backend.moves.clear();
+        double before = npc.snapshot().hologram().getLast().y();
+        npc.baby(true);
+        assertEquals(npc.snapshot().hologram().getLast().y() - before, backend.moves.getLast().dy(), 1e-6);
+        backend.moves.clear();
+        npc.appearance(new NpcAppearance(false, false, true, 3, null, true, false));
+        assertFalse(backend.moves.isEmpty());
+    }
+
+    @Test
+    void largeNametagOffsetsRespawnWithoutClampedRelativeMovement() {
+        NpcImpl npc = manager.create("Offset", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("label"));
+        manager.tick();
+        backend.shows.clear();
+        npc.nametagLayout(new net.folianpc.api.NametagLayout(0.3, 20, true));
+        assertTrue(backend.moves.isEmpty());
+        assertEquals(npc.snapshot().hologram().getFirst().y(), backend.shows.getLast().npc().hologram().getFirst().y());
+        npc.walkToward(1, 64, 0, 4);
+        manager.tick();
+        assertEquals(0.4, backend.moves.getLast().dx(), 1e-6);
+    }
+
 }

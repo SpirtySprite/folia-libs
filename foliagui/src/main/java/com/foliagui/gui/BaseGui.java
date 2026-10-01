@@ -368,7 +368,15 @@ public abstract class BaseGui implements InventoryHolder {
             }
             return inventoryAsync(action);
         }
-        service().scheduler().runForEntity(viewer, run,
+        service().scheduler().runForEntity(viewer, () -> {
+            synchronized (this) {
+                if (activeViewer.get() != viewer) {
+                    result.completeExceptionally(new IllegalStateException("Inventory viewer changed"));
+                    return;
+                }
+                run.run();
+            }
+        },
                 () -> result.completeExceptionally(new IllegalStateException("Viewer retired")));
         return result;
     }

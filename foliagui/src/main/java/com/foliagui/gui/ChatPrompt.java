@@ -56,7 +56,11 @@ public final class ChatPrompt {
         if (replaced != null) {
             replaced.abandon(player);
         }
-        service.scheduler().runForEntity(player, () -> player.sendMessage(Text.of(prompt)), null);
+        service.scheduler().runForEntity(player, () -> {
+            if (!service.isClosed() && sessions.chat.get(player) == session) {
+                player.sendMessage(Text.of(prompt));
+            }
+        }, null);
 
         if (timeoutTicks > 0) {
             TaskHandle[] handle = new TaskHandle[1];

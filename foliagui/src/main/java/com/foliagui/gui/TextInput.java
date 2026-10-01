@@ -37,27 +37,44 @@ public final class TextInput {
         Objects.requireNonNull(service, "service");
         Objects.requireNonNull(player, "player");
         InputSession session = new InputSession(service, player);
-        if (service.isClosed()) {
+        if (service.isClosed() || !service.sessions().trackInput(session)) {
             session.finish(InputResult.ended(InputResult.Status.CANCELLED));
             return session;
         }
         service.scheduler().runForEntity(player, () -> {
+            if (service.isClosed() || session.isCancelled()) {
+                session.finish(InputResult.ended(InputResult.Status.CANCELLED));
+                return;
+            }
             InputSession previous = service.sessions().input.get(player);
             if (previous != null) {
                 previous.finish(InputResult.ended(InputResult.Status.CANCELLED));
             }
-            service.sessions().input.put(player, session);
+            if (service.isClosed() || !service.sessions().activateInput(session)) {
+                session.finish(InputResult.ended(InputResult.Status.CANCELLED));
+                return;
+            }
             if (timeoutTicks > 0) {
                 session.timeout = service.scheduler().runForEntityTimer(player,
                         () -> session.finish(InputResult.ended(InputResult.Status.TIMED_OUT)),
                         () -> session.finish(InputResult.ended(InputResult.Status.DISCONNECTED)), timeoutTicks, timeoutTicks);
             }
             present(session, 0);
+            if (session.isCancelled()) {
+                if (session.timeout != null) {
+                    session.timeout.cancel();
+                }
+                session.cleanup.run();
+            }
         }, () -> session.finish(InputResult.ended(InputResult.Status.DISCONNECTED)));
         return session;
     }
 
     private void present(InputSession session, int first) {
+        if (session.service.isClosed()) {
+            session.finish(InputResult.ended(InputResult.Status.CANCELLED));
+            return;
+        }
         if (session.isCancelled()) {
             return;
         }

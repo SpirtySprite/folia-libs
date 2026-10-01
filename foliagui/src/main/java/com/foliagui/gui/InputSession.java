@@ -32,7 +32,7 @@ public final class InputSession implements TaskHandle, AutoCloseable {
         if (!finished.compareAndSet(false, true)) {
             return;
         }
-        service.sessions().input.remove(player, this);
+        service.sessions().forgetInput(this);
         TaskHandle timer = timeout;
         if (timer != null) {
             timer.cancel();

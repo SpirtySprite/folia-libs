@@ -926,6 +926,10 @@ storage.storageContentsAsync().thenAccept(contents -> saveLater(contents));
 storage.setStorageContents(savedContents);
 ```
 
+Removed managed controls are cleared during title changes and never become withdrawable deposits.
+If the viewer closes or changes before a queued storage read executes, its future completes
+exceptionally. Request a new snapshot for the current viewer rather than reusing that operation.
+
 The deprecated synchronous `getStorageContents` returns current contents on the owner thread and
 the latest captured snapshot elsewhere. `getStoredItems` has the same freshness contract. Inventory
 and item handles returned by Bukkit remain mutable handles; schedule external reads or mutations
@@ -1018,7 +1022,9 @@ session.cancel();
 ```
 
 Results distinguish submitted, cancelled, timed out, disconnected, unsupported and failed.
-Replacing a managed input cancels its predecessor. Shutdown and retirement complete pending
+Replacing a managed input cancels its predecessor. Inputs are tracked before presentation is
+scheduled, so shutdown also cancels attempts whose callbacks have not run. Closed services never
+present those queued prompts. Shutdown and retirement complete pending
 results instead of leaving callers waiting. Validation supplies visible feedback and retries;
 `length`, `nonblank`, `number` and `matching` validators compose with `and`. Numeric validation
 rejects NaN and infinity. Normal submission callbacks run on the player thread; retirement and

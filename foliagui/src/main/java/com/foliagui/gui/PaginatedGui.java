@@ -335,7 +335,7 @@ public class PaginatedGui extends BaseGui {
     }
 
     public void promptJumpToPage(@NotNull Player player) {
-        ChatPrompt.ask(service(), player, service().theme(player).message(GuiMessage.PAGE_PROMPT, getPagesCount()), 20 * 20, input -> {
+        ChatPrompt.ask(service(), player, service().theme(player).message(GuiMessage.PAGE_PROMPT, getPagesCount()), 20L * 20, input -> {
             if (input == null) {
                 return;
             }

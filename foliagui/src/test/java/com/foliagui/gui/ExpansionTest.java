@@ -256,6 +256,105 @@ class ExpansionTest {
     }
 
     @Test
+    void removedStorageControlsStayEmptyAfterTitleReplacement() {
+        StorageGui gui = new StorageGui(1, Component.text("Storage"));
+        gui.service(service);
+        gui.setItem(0, new GuiItem(Material.DIAMOND));
+        gui.setItem(2, new GuiItem(Material.BARRIER));
+        open(gui);
+        gui.setStorageContents(new ItemStack[]{null, new ItemStack(Material.EMERALD, 3)});
+        gui.removeItem(0);
+        gui.updateTitle("Renamed before redraw");
+        assertNull(gui.getInventory().getItem(0));
+        assertEquals(3, gui.getInventory().getItem(1).getAmount());
+        assertEquals(Material.BARRIER, gui.getInventory().getItem(2).getType());
+        var contents = gui.storageContentsAsync();
+        service.queue.flush();
+        assertNull(contents.join()[0]);
+        assertEquals(3, contents.join()[1].getAmount());
+    }
+
+    @Test
+    void queuedStorageReadsRejectAReplacementViewer() {
+        StorageGui gui = new StorageGui(1, Component.text("Storage"));
+        gui.service(service);
+        open(gui);
+        var stale = gui.storageContentsAsync();
+        var oldDispatch = service.queue.entities.remove();
+        gui.close(player);
+        service.queue.flush();
+        PlayerMock next = server.addPlayer();
+        gui.open(next);
+        service.queue.flush();
+        assertTrue(gui.isOpenFor(next));
+        oldDispatch.task().run();
+        var failure = assertThrows(java.util.concurrent.CompletionException.class, stale::join);
+        assertEquals("Inventory viewer changed", failure.getCause().getMessage());
+        var fresh = gui.storageContentsAsync();
+        service.queue.flush();
+        assertEquals(gui.getSize(), fresh.join().length);
+    }
+
+    @Test
+    void queuedStorageReadsRejectAClosedViewer() {
+        StorageGui gui = new StorageGui(1, Component.text("Storage"));
+        gui.service(service);
+        open(gui);
+        var stale = gui.storageContentsAsync();
+        var oldDispatch = service.queue.entities.remove();
+        gui.close(player);
+        service.queue.flush();
+        oldDispatch.task().run();
+        assertTrue(stale.isCompletedExceptionally());
+        assertEquals(gui.getSize(), gui.storageContentsAsync().join().length);
+    }
+
+    @Test
+    void shutdownTerminatesAllInputsBeforeTheirQueuedPresentation() {
+        TextInput input = TextInput.builder().mode(TextInput.Mode.CHAT).prompt("Queued prompt").build();
+        var first = input.open(service, player);
+        var replacement = input.open(service, player);
+        PlayerMock another = server.addPlayer();
+        var otherPlayer = input.open(service, another);
+        service.close();
+        for (InputSession session : List.of(first, replacement, otherPlayer)) {
+            assertTrue(session.result().isDone());
+            assertEquals(InputResult.Status.CANCELLED, session.result().join().status());
+        }
+        service.queue.flush();
+        assertFalse(service.sessions().hasAny(player));
+        assertFalse(service.sessions().hasAny(another));
+        assertEquals(0, service.sessions().input.size());
+        assertTrue(service.queue.timers.isEmpty());
+        assertNull(service.sessions().chatHandler);
+        assertNull(player.nextMessage());
+        assertNull(another.nextMessage());
+    }
+
+    @Test
+    void disconnectTerminatesInputsBeforeTheirQueuedPresentation() {
+        var pending = TextInput.builder().mode(TextInput.Mode.CHAT).build().open(service, player);
+        service.sessions().disconnect(player);
+        assertTrue(pending.result().isDone());
+        assertEquals(InputResult.Status.DISCONNECTED, pending.result().join().status());
+        service.queue.flush();
+        assertFalse(service.sessions().hasAny(player));
+        assertTrue(service.queue.timers.isEmpty());
+    }
+
+    @Test
+    void shutdownSuppressesAlreadyQueuedChatPresentation() {
+        var input = TextInput.builder().mode(TextInput.Mode.CHAT).prompt("Closed prompt").build().open(service, player);
+        service.queue.entities.remove().task().run();
+        assertTrue(ChatPrompt.hasSession(service, player));
+        service.close();
+        service.queue.flush();
+        assertEquals(InputResult.Status.CANCELLED, input.result().join().status());
+        assertFalse(ChatPrompt.hasSession(service, player));
+        assertNull(player.nextMessage());
+    }
+
+    @Test
     void snapshotsRejectStructuralMutationAndItemEditingRedraws() {
         Gui gui = gui();
         GuiItem item = new GuiItem(Material.STONE);

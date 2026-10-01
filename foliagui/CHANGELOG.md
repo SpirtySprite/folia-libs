@@ -15,6 +15,7 @@ All notable changes to FoliaGUI are documented here. The format follows
 - Managed item editing and isolated stack snapshots.
 
 ### Fixed
+- Cancel queued managed inputs at shutdown, clear removed storage controls on title changes and reject reads after viewer ownership changes.
 - Count pages using effective content capacity and reject stale loading or search results.
 - Enforce one viewer per GUI instance and preserve storage deposits across title changes and redraws.
 - Remove prompt sessions conditionally and bind native callbacks to their expected window identity.

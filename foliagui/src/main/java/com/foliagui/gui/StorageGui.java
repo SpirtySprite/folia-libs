@@ -24,6 +24,7 @@ public class StorageGui extends BaseGui {
         var items = guiItemsSnapshot();
         for (int slot : controlledSlots) {
             if (!items.containsKey(slot)) {
+                getInventory().setItem(slot, null);
                 applyItem(slot, null);
             }
         }
@@ -33,7 +34,10 @@ public class StorageGui extends BaseGui {
         captureStorage();
     }
 
-    /** Reads a deep copy of deposit contents on the owning thread without blocking the caller. */
+    /**
+     * Reads a deep copy of deposit contents on the owning thread without blocking the caller.
+     * The future fails if its queued viewer closes, retires or is replaced before execution.
+     */
     @org.jetbrains.annotations.ApiStatus.Experimental
     public @NotNull java.util.concurrent.CompletableFuture<ItemStack[]> storageContentsAsync() {
         return inventoryAsync(this::captureStorage);

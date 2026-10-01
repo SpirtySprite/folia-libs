@@ -6,8 +6,10 @@ import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -47,6 +49,8 @@ public interface Scheduler {
     default @NotNull TaskHandle repeatForEntity(@NotNull Entity entity, @NotNull Consumer<TaskHandle> task,
                                                 @Nullable Runnable retired, long initialDelayTicks,
                                                 long periodTicks) {
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(task, "task");
         DeferredHandle handle = new DeferredHandle();
         handle.bind(runForEntityTimer(entity, () -> task.accept(handle), retired, initialDelayTicks, periodTicks));
         return handle;
@@ -59,6 +63,8 @@ public interface Scheduler {
      * @return false if the task could not be scheduled
      */
     default boolean ensureForEntity(@NotNull Entity entity, @NotNull Runnable task, @Nullable Runnable retired) {
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(task, "task");
         if (Bukkit.getServer().isOwnedByCurrentRegion(entity)) {
             task.run();
             return true;
@@ -73,27 +79,40 @@ public interface Scheduler {
      * exception if it throws.
      */
     default <T> @NotNull CompletableFuture<T> callForEntity(@NotNull Entity entity, @NotNull Supplier<T> task) {
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(task, "task");
         CompletableFuture<T> future = new CompletableFuture<>();
         Runnable retired = () -> future.completeExceptionally(
                 new SchedulingException("The entity was removed before the task could run"));
-        boolean scheduled = runForEntity(entity, () -> complete(future, task), retired);
-        if (!scheduled) {
-            future.completeExceptionally(new SchedulingException(
-                    "The task could not be scheduled (the plugin is disabled or the entity was removed)"));
+        try {
+            if (!runForEntity(entity, () -> complete(future, task), retired)) {
+                future.completeExceptionally(new SchedulingException(
+                        "The task could not be scheduled (the plugin is disabled or the entity was removed)"));
+            }
+        } catch (RuntimeException failure) {
+            future.completeExceptionally(failure);
         }
         return future;
     }
 
     /** Like {@link #callForEntity} for the global region thread. */
     default <T> @NotNull CompletableFuture<T> callGlobal(@NotNull Supplier<T> task) {
+        Objects.requireNonNull(task, "task");
         CompletableFuture<T> future = new CompletableFuture<>();
-        if (!runGlobal(() -> complete(future, task))) {
-            future.completeExceptionally(new SchedulingException("The task could not be scheduled (the plugin is disabled)"));
+        try {
+            if (!runGlobal(() -> complete(future, task))) {
+                future.completeExceptionally(new SchedulingException("The task could not be scheduled (the plugin is disabled)"));
+            }
+        } catch (RuntimeException failure) {
+            future.completeExceptionally(failure);
         }
         return future;
     }
 
     private static <T> void complete(CompletableFuture<T> future, Supplier<T> task) {
+        if (future.isDone()) {
+            return;
+        }
         try {
             future.complete(task.get());
         } catch (Throwable failure) {
@@ -103,6 +122,64 @@ public interface Scheduler {
 
     /** Runs {@code task} on the thread that owns the region containing {@code location}. */
     boolean runForLocation(@NotNull Location location, @NotNull Runnable task);
+
+    /**
+     * Returns a result from the region owning a snapshot of {@code location}. No other region may be
+     * accessed there. Non-async continuations may run on that region or the attaching thread if the
+     * future is already complete. Plugin-bound calls fail on owner disable.
+     */
+    @ApiStatus.Experimental
+    default <T> @NotNull CompletableFuture<T> callForLocation(@NotNull Location location, @NotNull Supplier<T> task) {
+        Objects.requireNonNull(task, "task");
+        Location snapshot = Objects.requireNonNull(location, "location").clone();
+        Objects.requireNonNull(snapshot.getWorld(), "location.world");
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            if (!runForLocation(snapshot, () -> complete(future, task))) {
+                future.completeExceptionally(new SchedulingException("The location call could not be scheduled"));
+            }
+        } catch (RuntimeException failure) {
+            future.completeExceptionally(failure);
+        }
+        return future;
+    }
+
+    /**
+     * Schedules a cancellable one-shot entity task, after at least one tick. Retirement is not
+     * cancellation. Custom implementations using this default suppress cancelled callbacks; plugin
+     * schedulers also cancel the underlying task. Safe from any thread.
+     */
+    @ApiStatus.Experimental
+    default @NotNull TaskHandle scheduleForEntityLater(@NotNull Entity entity, @NotNull Runnable task,
+                                                       @Nullable Runnable retired, long delayTicks) {
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(task, "task");
+        CancellableTask handle = new CancellableTask();
+        return runForEntityLater(entity, handle.guard(task), retired, Math.max(1, delayTicks)) ? handle : TaskHandle.NOOP;
+    }
+
+    /** Schedules one cancellable global callback after at least one tick. Safe from any thread. */
+    @ApiStatus.Experimental
+    default @NotNull TaskHandle scheduleGlobalLater(@NotNull Runnable task, long delayTicks) {
+        Objects.requireNonNull(task, "task");
+        DeferredHandle handle = new DeferredHandle();
+        handle.bind(runGlobalTimer(() -> {
+            if (!handle.isCancelled()) {
+                handle.cancel();
+                task.run();
+            }
+        }, Math.max(1, delayTicks), 1));
+        return handle;
+    }
+
+    /** Schedules cancellable asynchronous work after at least one millisecond. Safe from any thread. */
+    @ApiStatus.Experimental
+    default @NotNull TaskHandle scheduleAsyncLater(@NotNull Runnable task, @NotNull Duration delay) {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(delay, "delay");
+        CancellableTask handle = new CancellableTask();
+        return runAsyncLater(handle.guard(task), delay) ? handle : TaskHandle.NOOP;
+    }
 
     /** Runs {@code task} on the global region thread (the main thread on Paper). */
     boolean runGlobal(@NotNull Runnable task);
@@ -127,5 +204,11 @@ public interface Scheduler {
      */
     static @NotNull Scheduler synchronous() {
         return SynchronousScheduler.INSTANCE;
+    }
+
+    /** Creates a virtual-time test scheduler; callbacks run only when time is advanced, without a server. */
+    @ApiStatus.Experimental
+    static @NotNull DeterministicScheduler deterministic() {
+        return new DeterministicScheduler();
     }
 }

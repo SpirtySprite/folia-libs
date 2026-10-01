@@ -175,17 +175,17 @@ public final class Diagnostics {
         }
 
         public synchronized @NotNull Builder info(@NotNull String name, @NotNull String value) {
-            return add(Status.INFO, name, Objects.requireNonNull(value, "value"));
+            return add(Status.INFO, name, value);
         }
 
         /** The feature works, but with reduced behaviour. */
         public synchronized @NotNull Builder degraded(@NotNull String feature, @NotNull String reason) {
-            return add(Status.DEGRADED, feature, Objects.requireNonNull(reason, "reason"));
+            return add(Status.DEGRADED, feature, reason);
         }
 
         /** The feature does not work at all on this server. */
         public synchronized @NotNull Builder unavailable(@NotNull String feature, @NotNull String reason) {
-            return add(Status.UNAVAILABLE, feature, Objects.requireNonNull(reason, "reason"));
+            return add(Status.UNAVAILABLE, feature, reason);
         }
 
         /** Shorthand for {@link #ok} or {@link #unavailable} depending on {@code available}. */

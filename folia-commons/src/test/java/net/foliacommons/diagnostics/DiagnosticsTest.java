@@ -11,6 +11,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DiagnosticsTest {
 
     @Test
+    void absentDetailsKeepTheirPreviousDisplayAndStructuredRepresentation() {
+        Diagnostics report = Diagnostics.named("Lib").info("Backend", null)
+                .degraded("Reduced", null).unavailable("Missing", null).build();
+
+        assertTrue(report.entries().stream().allMatch(entry -> entry.detail().isEmpty()));
+        assertTrue(report.toString().contains("[--] Backend\n"));
+        assertFalse(report.toString().contains("null"));
+    }
+
+    @Test
     void builtReportsDoNotChangeWhenTheirBuilderIsReused() {
         Diagnostics.Builder builder = Diagnostics.named("Library").section("Features").ok("Scheduling");
         Diagnostics first = builder.build();

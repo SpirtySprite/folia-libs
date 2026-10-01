@@ -8,10 +8,16 @@ All notable changes to folia-commons are documented here. The format follows
 
 ### Added
 - Structured, immutable diagnostic entries with optional sections and explanations.
+- Experimental location result calls, cancellable delayed entity/global/async work, and task groups.
+- Experimental deterministic scheduling with virtual time, retirement, and shutdown simulation.
+- Experimental monotonic deadlines for elapsed-time TTLs and cooldowns.
+- Shared text parsing, legacy serializers, and escaping primitives, preserving library wrapper behavior.
 
 ### Fixed
 - Built diagnostics remain unchanged when their builder is reused.
 - Unknown and malformed server versions no longer enable features intended for newer servers.
+- Accepted plugin-bound result calls fail on owner disable instead of remaining unresolved.
+- Immediate entity work respects owner enablement; required scheduler inputs reject null consistently.
 
 ## [1.0.0] - 2026-10-01
 

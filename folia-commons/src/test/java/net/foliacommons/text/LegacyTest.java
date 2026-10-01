@@ -9,6 +9,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class LegacyTest {
 
     @Test
+    void malformedAndTrailingCodesStayLiteral() {
+        for (String raw : new String[]{"&", "§", "&#1234", "&#zzzzzz", "&x", "&z", "§x"}) {
+            assertEquals(raw, Legacy.toMini(raw), raw);
+            assertEquals(raw, Legacy.strip(raw), raw);
+        }
+        assertEquals("", Legacy.toMini(null));
+        assertEquals("", Legacy.strip(null));
+        assertFalse(Legacy.hasCodes(null));
+        assertFalse(Legacy.hasCodes("plain 🐈"));
+    }
+
+    @Test
+    void conversionPreservesMarkupEscapesAndResetsStyles() {
+        assertEquals("<bold>Bold <reset><green>Été 🐈 <reset>plain \\<red>",
+                Legacy.toMini("&lBold &aÉté 🐈 &rplain \\<red>"));
+        assertEquals("<reset><#Ab12Cd>X", Legacy.toMini("&x&A&b&1&2&C&dX"));
+        assertEquals("Été 🐈 <red>markup</red>", Legacy.strip("&AÉté 🐈 <red>markup</red>"));
+    }
+
+    @Test
     void convertsAmpersandAndSectionCodes() {
         assertEquals("<reset><green>Hi <bold>there", Legacy.toMini("&aHi &lthere"));
         assertEquals("<reset><red>X", Legacy.toMini("§cX"));

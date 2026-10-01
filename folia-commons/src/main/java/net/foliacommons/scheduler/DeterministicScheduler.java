@@ -83,7 +83,10 @@ public final class DeterministicScheduler implements Scheduler, AutoCloseable {
                     throw failure;
                 }
                 synchronized (queue) {
-                    if (job.period > 0 && !job.isCancelled() && !closed && !retired.contains(job.entity)) {
+                    if (job.period > 0 && (closed || retired.contains(job.entity))) {
+                        job.cancel();
+                    }
+                    if (job.period > 0 && !job.isCancelled()) {
                         job.due = Math.addExact(job.due, job.period);
                         queue.add(job);
                     }

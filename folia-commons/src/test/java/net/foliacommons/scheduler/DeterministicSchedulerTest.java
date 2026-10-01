@@ -41,13 +41,14 @@ class DeterministicSchedulerTest {
     void retiringAnEntityDuringItsCallbackStopsRepetition() {
         try (DeterministicScheduler scheduler = Scheduler.deterministic()) {
             AtomicInteger calls = new AtomicInteger();
-            scheduler.runForEntityTimer(entity, () -> {
+            TaskHandle timer = scheduler.runForEntityTimer(entity, () -> {
                 calls.incrementAndGet();
                 scheduler.retire(entity);
             }, null, 1, 1);
             scheduler.advanceTicks(10);
             assertEquals(1, calls.get());
             assertEquals(0, scheduler.pendingTasks());
+            assertTrue(timer.isCancelled());
         }
     }
 

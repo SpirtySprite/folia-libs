@@ -7,6 +7,7 @@ import java.util.logging.Logger;
 
 public final class TabOrder {
     private static final Method METHOD = resolve();
+    private static final Method GETTER = resolveGetter();
     private static volatile boolean warned = false;
 
     private TabOrder() {
@@ -26,6 +27,26 @@ public final class TabOrder {
 
     public static boolean supported() {
         return METHOD != null;
+    }
+
+    private static Method resolveGetter() {
+        for (String name : new String[]{"playerListOrder", "getPlayerListOrder"}) {
+            try {
+                return Player.class.getMethod(name);
+            } catch (NoSuchMethodException ignored) {
+            }
+        }
+        return null;
+    }
+
+    public static java.util.OptionalInt current(Player player) {
+        if (GETTER != null) {
+            try {
+                return java.util.OptionalInt.of((Integer) GETTER.invoke(player));
+            } catch (ReflectiveOperationException ignored) {
+            }
+        }
+        return java.util.OptionalInt.empty();
     }
 
     public static void set(Player player, int order) {

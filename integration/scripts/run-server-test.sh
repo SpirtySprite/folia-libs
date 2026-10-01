@@ -73,6 +73,9 @@ RUN="$ROOT/integration/target/server-$PROJECT-$VERSION"
 rm -rf "$RUN"
 mkdir -p "$RUN/plugins"
 cp "$PLUGIN" "$RUN/plugins/folia-integration.jar"
+if [ -n "${BOARD_FIXTURES_DIR:-}" ]; then
+  cp "$BOARD_FIXTURES_DIR"/board-fixture-*.jar "$RUN/plugins/"
+fi
 cp "$SERVER_JAR" "$RUN/server.jar"
 echo "eula=true" > "$RUN/eula.txt"
 cat > "$RUN/server.properties" <<'PROPS'
@@ -171,7 +174,7 @@ if [ "$BOT_FLAG" = true ]; then
     cat "$RUN/bot.log" 2>/dev/null | tail -n 30
     exit 1
   fi
-  python3 - "$RUN/bot-result.json" <<'PY' || STATUS=$?
+  python3 - "$RUN/bot-result.json" "${BOARD_FIXTURES_DIR:-}" <<'PY' || STATUS=$?
 import json, sys
 seen = json.load(open(sys.argv[1], encoding="utf-8"))
 problems = []
@@ -191,6 +194,28 @@ need(any("| ItNpc |" in line and "ADD_PLAYER" in line for line in seen["playerIn
 need(any(line.startswith("PLAYER") for line in seen["entities"]), "saw an NPC spawn as a player entity")
 need(any("GENERIC_9X3" in line and "Integration Menu" in line for line in seen["screens"]), "was shown the 3 row menu 'Integration Menu'")
 need(any("container=1" in line and "filled=1" in line for line in seen["containerContents"]), "received the menu's item")
+if sys.argv[2]:
+    for label in ("BoardFixtureA", "BoardFixtureB"):
+        need(any(line.endswith("| " + label) for line in seen["objectives"]), "received " + label + " sidebar")
+    active = seen["activeObjectives"]
+    first_ids = {line.split(" | ")[0] for line in seen["objectives"] if line.endswith("| BoardFixtureA")}
+    second_ids = {line.split(" | ")[0] for line in seen["objectives"] if line.endswith("| BoardFixtureB")}
+    need(first_ids.isdisjoint(second_ids), "relocated copies used separate objective IDs")
+    need(first_ids and not first_ids.intersection(active), "disabled owner removed its sidebar")
+    need(second_ids and second_ids.intersection(active), "the other copy's sidebar remained registered")
+    need("foreign-objective" in active and "foreign-team" in seen["activeTeams"], "foreign presentation identifiers remained registered")
+    need(not any(value == "BoardFixtureA" for value in seen["activeTeams"].values()), "disabled owner removed its nametag")
+    need(any(value == "BoardFixtureB" for value in seen["activeTeams"].values()), "the other copy's nametag remained registered")
+    bars = seen["activeBossBars"].values()
+    need("BoardFixtureA" not in bars and "BoardFixtureB" in bars, "disabled owner removed only its boss bar")
+    need(any(" | ItBot | 11 |" in line for line in seen["scores"])
+         and any(" | ItBot | 22 |" in line for line in seen["scores"]), "shared score updates preserved both viewer overrides")
+    first_scores = {line.split(" | ")[0] for line in seen["scores"] if " | ItBot | 11 |" in line}
+    second_scores = {line.split(" | ")[0] for line in seen["scores"] if " | ItBot | 22 |" in line}
+    need(first_scores and not first_scores.intersection(active), "disabled owner removed its score objective")
+    need(second_scores and second_scores.intersection(active), "the other copy's score objective remained registered")
+    need(any(line.startswith("tab | BoardFixtureB |") for line in seen["presentationEvents"])
+         and not any(line == "tab |  | " for line in seen["presentationEvents"]), "closing the first copy preserved the second copy's tab header")
 sys.exit(1 if problems else 0)
 PY
 fi

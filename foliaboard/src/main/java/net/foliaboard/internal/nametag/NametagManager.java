@@ -18,6 +18,8 @@ import java.util.function.Supplier;
 
 public final class NametagManager {
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final PacketAdapter adapter;
     private final String namespace;
     private final Map<UUID, NametagImpl> byTarget = new ConcurrentHashMap<>();
@@ -26,8 +28,17 @@ public final class NametagManager {
 
     public NametagManager(Plugin plugin, PacketAdapter adapter, String namespace) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.namespace = namespace;
         this.adapter = adapter;
+    }
+
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = cleanupPlugin;
     }
 
     public @NotNull Nametag get(@NotNull Player target) {
@@ -41,7 +52,10 @@ public final class NametagManager {
                 return existing;
             }
             created[0] = true;
-            return new NametagImpl(plugin, adapter, target, generateTeamName(sortWeight), online);
+            NametagImpl tag = new NametagImpl(plugin, adapter, target, generateTeamName(sortWeight), online);
+            tag.cleanupPlugin(cleanupPlugin);
+            tag.metrics(metrics);
+            return tag;
         });
         if (created[0] && applyNow) {
             impl.apply();

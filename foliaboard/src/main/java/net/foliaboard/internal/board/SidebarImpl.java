@@ -1,6 +1,7 @@
 package net.foliaboard.internal.board;
 
 import net.foliaboard.api.Sidebar;
+import net.foliaboard.api.SidebarState;
 import net.foliaboard.api.format.NumberFormat;
 import net.foliaboard.api.hook.LineProcessor;
 import net.foliaboard.internal.packet.DisplaySlotType;
@@ -22,6 +23,8 @@ public final class SidebarImpl implements Sidebar {
     }
 
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final PacketAdapter adapter;
     private final Player player;
     private final String objectiveId;
@@ -32,7 +35,7 @@ public final class SidebarImpl implements Sidebar {
     private final List<LineData> desiredLines = new ArrayList<>();
     private boolean desiredVisible = true;
 
-    private boolean created = false;
+    private volatile boolean created = false;
     private Component sentTitle = Component.empty();
     private final List<LineData> sentLines = new ArrayList<>();
 
@@ -45,6 +48,7 @@ public final class SidebarImpl implements Sidebar {
     private static final int MAX_LINE_INDEX = 63;
 
     private volatile boolean closed = false;
+    private volatile java.util.function.IntConsumer refreshAction;
     private final AtomicBoolean flushScheduled = new AtomicBoolean(false);
     private boolean warnedLineCount = false;
     private boolean warnedOversize = false;
@@ -53,15 +57,76 @@ public final class SidebarImpl implements Sidebar {
     public SidebarImpl(Plugin plugin, PacketAdapter adapter, Player player, String objectiveId,
                        List<LineProcessor> processors) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.adapter = adapter;
         this.player = player;
         this.objectiveId = objectiveId;
         this.processors = processors;
     }
 
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = java.util.Objects.requireNonNull(cleanupPlugin, "cleanupPlugin");
+    }
+
     @Override
     public @NotNull Player player() {
         return player;
+    }
+
+    public void refreshAction(java.util.function.IntConsumer action) {
+        refreshAction = action;
+    }
+
+    public boolean ownsRefresh(java.util.function.IntConsumer action) {
+        return refreshAction == action;
+    }
+
+    @Override
+    public Sidebar refresh() {
+        return requestRefresh(Integer.MIN_VALUE);
+    }
+
+    @Override
+    public Sidebar refreshLine(int index) {
+        if (index < -1 || index > MAX_LINE_INDEX) {
+            throw new IllegalArgumentException("Refresh index must be -1 to 63");
+        }
+        return requestRefresh(index);
+    }
+
+    private Sidebar requestRefresh(int index) {
+        java.util.function.IntConsumer action = refreshAction;
+        if (action != null && !closed) {
+            Schedulers.onEntity(plugin, player, () -> {
+                if (!closed && refreshAction == action) {
+                    action.accept(index);
+                }
+            });
+        }
+        return this;
+    }
+
+    @Override
+    public synchronized SidebarState snapshot() {
+        return new SidebarState(desiredTitle, desiredLines.stream()
+                .map(row -> new SidebarState.Line(row.text(), java.util.Optional.ofNullable(row.format()))).toList(), desiredVisible);
+    }
+
+    @Override
+    public Sidebar replace(SidebarState state) {
+        Objects.requireNonNull(state, "state");
+        synchronized (this) {
+            desiredTitle = state.title();
+            desiredLines.clear();
+            state.lines().forEach(row -> desiredLines.add(new LineData(row.text(), row.format().orElse(null))));
+            desiredVisible = state.visible();
+        }
+        scheduleFlush();
+        return this;
     }
 
     @Override
@@ -158,7 +223,9 @@ public final class SidebarImpl implements Sidebar {
     @Override
     public @NotNull Sidebar lineProcessors(@NotNull List<LineProcessor> processors) {
         this.localProcessors = processors.isEmpty() ? null : List.copyOf(processors);
-        scheduleFlush();
+        if (created) {
+            scheduleFlush();
+        }
         return this;
     }
 
@@ -184,12 +251,14 @@ public final class SidebarImpl implements Sidebar {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.SIDEBAR);
         if (closed) {
             return;
         }
         closed = true;
-        Schedulers.onEntity(plugin, player, () -> {
+        refreshAction = null;
+        Schedulers.onEntity(cleanupPlugin, player, () -> {
             if (created) {
                 adapter.removeObjective(player, objectiveId);
                 created = false;
@@ -198,6 +267,7 @@ public final class SidebarImpl implements Sidebar {
     }
 
     private void scheduleFlush() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.SIDEBAR);
         if (closed) {
             return;
         }
@@ -307,16 +377,26 @@ public final class SidebarImpl implements Sidebar {
         Component out = input;
         if (processors != null) {
             for (LineProcessor processor : processors) {
-                out = processor.process(player, index, out);
+                out = processSafely(processor, index, out);
             }
         }
         List<LineProcessor> local = localProcessors;
         if (local != null) {
             for (LineProcessor processor : local) {
-                out = processor.process(player, index, out);
+                out = processSafely(processor, index, out);
             }
         }
         return out;
+    }
+
+    private Component processSafely(LineProcessor processor, int index, Component input) {
+        try {
+            return Objects.requireNonNull(processor.process(player, index, input), "processor result");
+        } catch (RuntimeException failure) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "FoliaBoard line processor failed for row " + index + "; preserving its input", failure);
+            return input;
+        }
     }
 
     private static volatile String[] ENTRY_CACHE = new String[0];

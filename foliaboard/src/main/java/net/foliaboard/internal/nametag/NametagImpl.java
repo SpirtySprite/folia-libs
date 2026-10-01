@@ -22,6 +22,8 @@ import java.util.function.Supplier;
 
 public final class NametagImpl implements Nametag {
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final PacketAdapter adapter;
     private final Player target;
     private final String teamName;
@@ -34,11 +36,20 @@ public final class NametagImpl implements Nametag {
     public NametagImpl(Plugin plugin, PacketAdapter adapter, Player target, String teamName,
                        Supplier<Collection<? extends Player>> onlinePlayers) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.adapter = adapter;
         this.target = target;
         this.teamName = teamName;
         this.onlinePlayers = onlinePlayers;
         this.data = new TeamData(teamName);
+    }
+
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = java.util.Objects.requireNonNull(cleanupPlugin, "cleanupPlugin");
     }
 
     @Override
@@ -98,6 +109,7 @@ public final class NametagImpl implements Nametag {
             return;
         }
         UUID id = viewer.getUniqueId();
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.TEAM);
         Schedulers.onEntity(plugin, viewer, () -> {
             if (removed) {
                 return;
@@ -130,12 +142,13 @@ public final class NametagImpl implements Nametag {
 
     @Override
     public void remove() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.TEAM);
         if (removed) {
             return;
         }
         removed = true;
         for (Player viewer : onlinePlayers.get()) {
-            Schedulers.onEntity(plugin, viewer, () -> adapter.removeTeam(viewer, teamName));
+            Schedulers.onEntity(cleanupPlugin, viewer, () -> adapter.removeTeam(viewer, teamName));
         }
         receivers.clear();
     }

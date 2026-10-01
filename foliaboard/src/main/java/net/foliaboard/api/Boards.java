@@ -8,6 +8,23 @@ import org.jetbrains.annotations.Nullable;
 
 /** Sidebars, layouts and global sidebars. Obtain it from {@code FoliaBoard#boards()}. */
 public interface Boards {
+    /** Rotates copied layout recipes at a positive tick interval. Shared headers can use LayoutSection. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default net.foliaboard.api.layout.SidebarRotation rotate(@NotNull Player player,
+            @NotNull java.util.List<Layout> pages, long intervalTicks) {
+        throw new UnsupportedOperationException("Rotation is not supported by this Boards implementation");
+    }
+    /** Shows a temporary layout and restores the current base selection when closed. Supports nested scopes. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default net.foliaboard.api.layout.LayoutScope temporaryLayout(@NotNull Player player, @NotNull Layout layout) {
+        throw new UnsupportedOperationException("Temporary layouts are not supported by this Boards implementation");
+    }
+
+    /** Shows a temporary layout for at least one tick. Manual selection supersedes its restoration. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default net.foliaboard.api.layout.LayoutScope temporaryLayout(@NotNull Player player, @NotNull Layout layout, long ticks) {
+        throw new UnsupportedOperationException("Timed layouts are not supported by this Boards implementation");
+    }
 
     /** Starts a fluent description of a player's sidebar. */
     @NotNull BoardBuilder create(@NotNull Player player);

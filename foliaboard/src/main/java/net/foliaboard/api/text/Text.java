@@ -6,11 +6,17 @@ import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 
 public final class Text {
     private static final int CACHE_LIMIT = 2048;
-    private static final Map<String, Component> CACHE = new ConcurrentHashMap<>();
+    private static final Map<String, Component> CACHE = Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75F, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Component> eldest) {
+            return size() > CACHE_LIMIT;
+        }
+    });
 
     private Text() {
     }
@@ -37,9 +43,6 @@ public final class Text {
             return hit;
         }
         Component parsed = parse(anyFormat);
-        if (CACHE.size() >= CACHE_LIMIT) {
-            CACHE.clear();
-        }
         CACHE.put(anyFormat, parsed);
         return parsed;
     }

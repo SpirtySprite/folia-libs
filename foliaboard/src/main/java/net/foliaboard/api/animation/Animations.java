@@ -12,6 +12,16 @@ import java.util.Arrays;
 import java.util.List;
 
 public final class Animations {
+    /** Creates restartable, pausable frame playback with a positive frame duration. Frames are copied. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public static <T> @NotNull AnimationTimeline<T> timeline(@NotNull Duration period, @NotNull List<T> frames) {
+        List<T> copy = List.copyOf(frames);
+        long nanos = period.toNanos();
+        if (copy.isEmpty() || nanos < 1) {
+            throw new IllegalArgumentException("Timeline needs frames and a positive frame duration");
+        }
+        return new AnimationTimeline<>(elapsed -> copy.get((int) ((elapsed / nanos) % copy.size())));
+    }
     private Animations() {
     }
 

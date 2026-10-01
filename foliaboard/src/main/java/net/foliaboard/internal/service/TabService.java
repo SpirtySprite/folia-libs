@@ -83,17 +83,21 @@ public final class TabService implements Tabs {
     @Override
     public void name(@NotNull Player target, @NotNull ComponentLike name) {
         Component c = name.asComponent();
-        Schedulers.onEntity(runtime.plugin(), target, () -> target.playerListName(c));
+        apply(target, () -> target.playerListName(c));
     }
 
     @Override
     public void resetName(@NotNull Player target) {
-        Schedulers.onEntity(runtime.plugin(), target, () -> target.playerListName(null));
+        apply(target, () -> target.playerListName(null));
     }
 
     @Override
     public void order(@NotNull Player target, int order) {
-        Schedulers.onEntity(runtime.plugin(), target, () -> TabOrder.set(target, order));
+        if (TabOrder.supported()) {
+            apply(target, () -> TabOrder.set(target, order));
+        } else {
+            runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.TAB);
+        }
     }
 
     @Override
@@ -109,11 +113,13 @@ public final class TabService implements Tabs {
     @Override
     public void nameFor(@NotNull Player viewer, @NotNull Player target, @NotNull ComponentLike name) {
         Component c = name.asComponent();
+        runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.TAB);
         Schedulers.onEntity(runtime.plugin(), viewer, () -> runtime.adapter().tabDisplayName(viewer, target, c));
     }
 
     @Override
     public void resetNameFor(@NotNull Player viewer, @NotNull Player target) {
+        runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.TAB);
         Schedulers.onEntity(runtime.plugin(), viewer, () -> runtime.adapter().tabDisplayName(viewer, target, null));
     }
 
@@ -131,13 +137,21 @@ public final class TabService implements Tabs {
     public void headerFooter(@NotNull Player player, @NotNull ComponentLike header, @NotNull ComponentLike footer) {
         Component h = header.asComponent();
         Component f = footer.asComponent();
-        Schedulers.onEntity(runtime.plugin(), player, () -> player.sendPlayerListHeaderAndFooter(h, f));
+        apply(player, () -> player.sendPlayerListHeaderAndFooter(h, f));
     }
 
     @Override
     public void clearHeaderFooter(@NotNull Player player) {
-        Schedulers.onEntity(runtime.plugin(), player,
+        apply(player,
                 () -> player.sendPlayerListHeaderAndFooter(Component.empty(), Component.empty()));
+    }
+
+    private void apply(Player player, Runnable change) {
+        runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.TAB);
+        Schedulers.onEntity(runtime.plugin(), player, () -> {
+            change.run();
+            runtime.metrics().changed(net.foliaboard.api.PresentationStats.Surface.TAB);
+        });
     }
 
     public void onJoin(@NotNull Player player) {

@@ -89,3 +89,19 @@ Each module is released on its own.
 3. Tag the commit `<module>-vx.y.z` (for example `foliagui-v1.2.0`) and push the tag. The release workflow
    checks that the tag matches the pom, builds the module and what it depends on, and publishes a GitHub
    release with the jars and the changelog notes.
+
+## FoliaBoard cleanup and relocation fixtures
+
+Build the integration plugin and matching protocol client as described above, then generate two
+separately relocated fixture plugins:
+
+```sh
+python3 integration/scripts/build-board-fixtures.py integration/target/folia-integration.jar integration/target/board-fixtures
+BOARD_FIXTURES_DIR="$PWD/integration/target/board-fixtures" BOT_JAR="$PWD/integration-bot/target/folia-integration-bot.jar" integration/scripts/run-server-test.sh folia 1.21.11
+```
+
+The fixtures use an independent lifecycle host. One owner is disabled, enabled again and disabled
+while the other remains active. Client assertions check sidebar and team removal, boss-bar lifetime,
+viewer score overrides, tab ownership and retention of unrelated objective/team identifiers. Results
+include current client state and packet history, so receiving a create packet alone cannot pass a
+cleanup assertion. Use a client protocol matching the server version.

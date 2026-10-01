@@ -14,6 +14,7 @@ import java.util.function.Consumer;
 /** FoliaBoard's view of the scheduler from folia-commons. */
 public final class Schedulers {
     private static volatile boolean synchronousForTesting = false;
+    private static volatile Scheduler schedulerForTesting;
 
     private Schedulers() {
     }
@@ -27,7 +28,23 @@ public final class Schedulers {
     }
 
     private static Scheduler scheduler(Plugin plugin) {
+        if (schedulerForTesting != null) {
+            return schedulerForTesting;
+        }
         return synchronousForTesting ? Scheduler.synchronous() : Scheduler.forPlugin(plugin);
+    }
+
+    public static void setSchedulerForTesting(Scheduler scheduler) {
+        schedulerForTesting = scheduler;
+    }
+
+    public static TaskHandle entityLater(Plugin plugin, Entity entity, Runnable task, long ticks) {
+        return synchronousForTesting ? TaskHandle.NOOP : scheduler(plugin).scheduleForEntityLater(entity, task, null, ticks);
+    }
+
+    public static TaskHandle entityTaskTimer(Plugin plugin, Entity entity, Consumer<TaskHandle> task,
+                                             long delay, long period) {
+        return scheduler(plugin).repeatForEntity(entity, task, null, delay, period);
     }
 
     public static @NotNull ScheduledHandle globalTimer(@NotNull Plugin plugin, @NotNull Runnable task,

@@ -23,6 +23,8 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
     }
 
     private final Plugin plugin;
+    private Plugin cleanupPlugin;
+    private net.foliaboard.internal.metrics.PacketMetrics metrics = new net.foliaboard.internal.metrics.PacketMetrics();
     private final Placeholders placeholders;
     private final Player player;
     private final String id;
@@ -32,11 +34,12 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
     private volatile boolean hidden;
     private volatile Schedulers.ScheduledHandle timer;
     private String sentText;
-    private long ticksAlive;
+    private volatile net.foliacommons.scheduler.TaskHandle expiry;
 
     public ManagedBossBarImpl(Plugin plugin, Placeholders placeholders, Player player, String id, Spec spec,
                               BiConsumer<Player, String> onHide) {
         this.plugin = plugin;
+        this.cleanupPlugin = plugin;
         this.placeholders = placeholders;
         this.player = player;
         this.id = id;
@@ -50,47 +53,59 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
             update();
             if (!hidden) {
                 player.showBossBar(bar);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
             }
         });
         int interval = spec.refreshTicks() > 0 ? spec.refreshTicks()
                 : spec.placeholders() ? DEFAULT_PLACEHOLDER_REFRESH : -1;
-        if (interval <= 0 && spec.lifetimeTicks() > 0) {
-            interval = (int) Math.min(Integer.MAX_VALUE, spec.lifetimeTicks());
-        }
         if (interval > 0) {
-            int period = interval;
             timer = Schedulers.entityTimer(plugin, player, handle -> {
                 if (hidden || !player.isOnline()) {
                     handle.cancel();
                     return;
                 }
-                ticksAlive += period;
-                if (spec.lifetimeTicks() > 0 && ticksAlive >= spec.lifetimeTicks()) {
-                    hide();
-                    return;
-                }
                 update();
             }, interval, interval);
+        }
+        if (spec.lifetimeTicks() > 0) {
+            expiry = Schedulers.entityLater(plugin, player, this::hide, spec.lifetimeTicks());
+            if (hidden) {
+                expiry.cancel();
+            }
         }
     }
 
     public synchronized void update() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         if (hidden) {
             return;
         }
-        String raw = spec.text().apply(player);
+        String raw = safely(() -> spec.text().apply(player), sentText);
         String text = raw == null ? "" : spec.placeholders() ? placeholders.resolveForMiniMessage(player, raw) : raw;
         if (!text.equals(sentText)) {
             bar.name(Text.cached(text));
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
             sentText = text;
         }
-        float progress = (float) clamp(spec.progress().applyAsDouble(player));
+        float progress = (float) clamp(safely(() -> spec.progress().applyAsDouble(player), (double) bar.progress()));
         if (bar.progress() != progress) {
             bar.progress(progress);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         }
-        BossBar.Color color = spec.color().apply(player);
+        BossBar.Color color = safely(() -> spec.color().apply(player), bar.color());
         if (color != null && bar.color() != color) {
             bar.color(color);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        }
+    }
+
+    private <T> T safely(java.util.function.Supplier<T> render, T previous) {
+        try {
+            return render.get();
+        } catch (RuntimeException failure) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "Boss-bar renderer failed; preserving its previous value", failure);
+            return previous;
         }
     }
 
@@ -99,6 +114,14 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
             return 0.0D;
         }
         return Math.max(0.0D, Math.min(1.0D, value));
+    }
+
+    public void metrics(net.foliaboard.internal.metrics.PacketMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void cleanupPlugin(Plugin cleanupPlugin) {
+        this.cleanupPlugin = java.util.Objects.requireNonNull(cleanupPlugin, "cleanupPlugin");
     }
 
     @Override
@@ -123,31 +146,47 @@ public final class ManagedBossBarImpl implements ManagedBossBar {
     }
 
     @Override
-    public void hide() {
+    public synchronized void hide() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         if (hidden) {
             return;
         }
         hidden = true;
+        net.foliacommons.scheduler.TaskHandle expiration = expiry;
+        if (expiration != null) {
+            expiration.cancel();
+        }
         Schedulers.ScheduledHandle running = timer;
         timer = null;
         if (running != null) {
             running.cancel();
         }
-        Schedulers.onEntity(plugin, player, () -> player.hideBossBar(bar));
+        Schedulers.onEntity(cleanupPlugin, player, () -> {
+            player.hideBossBar(bar);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        });
         onHide.accept(player, id);
     }
 
-    public void hideSilently() {
+    public synchronized void hideSilently() {
+        metrics.requested(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
         if (hidden) {
             return;
         }
         hidden = true;
+        net.foliacommons.scheduler.TaskHandle expiration = expiry;
+        if (expiration != null) {
+            expiration.cancel();
+        }
         Schedulers.ScheduledHandle running = timer;
         timer = null;
         if (running != null) {
             running.cancel();
         }
-        Schedulers.onEntity(plugin, player, () -> player.hideBossBar(bar));
+        Schedulers.onEntity(cleanupPlugin, player, () -> {
+            player.hideBossBar(bar);
+            metrics.changed(net.foliaboard.api.PresentationStats.Surface.BOSS_BAR);
+        });
     }
 
     @Override

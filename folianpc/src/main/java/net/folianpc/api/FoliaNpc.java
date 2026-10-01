@@ -317,6 +317,7 @@ public final class FoliaNpc {
                 .feature("Name plate hiding", c.namePlateHiding(),
                         "the vanilla name plate, glow colour and collision cannot be controlled")
                 .feature("Equipment", c.equipment(), "equipment has no visible effect")
+                .feature("Entity dimensions", backend.dimensionsSupported(), "navigation and nametag sizing use conservative defaults")
                 .feature("Scale", c.scale(), "NPCs always render at scale 1.0")
                 .feature("Rich text", c.richText(), "gradients and hover text fall back to legacy colours")
                 .feature("Baby state", c.baby(), "baby() has no visible effect")

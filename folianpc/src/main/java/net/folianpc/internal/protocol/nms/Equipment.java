@@ -34,13 +34,17 @@ final class Equipment {
     }
 
     Object packet(int entityId, Map<EquipmentSlot, ItemStack> equipment) {
-        List<Object> pairs = new ArrayList<>(equipment.size());
-        equipment.forEach((slot, item) -> {
+        return packet(entityId, equipment, equipment.keySet());
+    }
+
+    Object packet(int entityId, Map<EquipmentSlot, ItemStack> equipment, java.util.Set<EquipmentSlot> changed) {
+        List<Object> pairs = new ArrayList<>(changed.size());
+        for (EquipmentSlot slot : changed) {
             Object nmsSlot = slot(slot);
             if (nmsSlot != null) {
-                pairs.add(Reflect.invoke(pairOf, null, nmsSlot, Reflect.invoke(asNmsCopy, null, item)));
+                pairs.add(Reflect.invoke(pairOf, null, nmsSlot, Reflect.invoke(asNmsCopy, null, equipment.get(slot))));
             }
-        });
+        }
         return pairs.isEmpty() ? null : Reflect.newInstance(packetCtor, entityId, pairs);
     }
 

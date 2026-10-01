@@ -45,6 +45,7 @@ import java.util.function.Consumer;
 public final class NpcImpl implements Npc {
 
     private static final int MAX_PROFILE_NAME = 16;
+    private static final NavigationOptions DEFAULT_NAVIGATION = NavigationOptions.defaults();
 
     public record ActionEntry(NpcAction action, long delayTicks) {
     }
@@ -61,6 +62,7 @@ public final class NpcImpl implements Npc {
     private boolean dirtyMeta;
     private boolean dirtyScale;
     private boolean dirtyEquipment;
+    private final Set<EquipmentSlot> dirtySlots = java.util.EnumSet.noneOf(EquipmentSlot.class);
     private boolean dirtyNametag;
     private final Set<Integer> staleLines = new java.util.HashSet<>();
 
@@ -121,8 +123,8 @@ public final class NpcImpl implements Npc {
     NpcImpl(UUID uuid, int entityId, String name, EntityType type, Position position, NpcManager manager) {
         this.uuid = uuid;
         this.entityId = entityId;
-        this.name = name;
-        this.type = type;
+        this.name = name == null || name.isBlank() ? "NPC" : name;
+        this.type = type == null ? EntityType.PLAYER : type;
         this.position = position;
         this.manager = manager;
     }
@@ -236,7 +238,7 @@ public final class NpcImpl implements Npc {
             case HORSE, DONKEY, MULE, CAMEL -> 1.7;
             case SPIDER -> 1.4;
             case PLAYER, ZOMBIE, SKELETON, VILLAGER, ENDERMAN -> 0.6;
-            default -> 1.0;
+            default -> 4.0;
         };
         double height = switch (type) {
             case ENDERMAN -> 2.9;
@@ -250,14 +252,24 @@ public final class NpcImpl implements Npc {
             case GIANT -> 12;
             case GHAST -> 4;
             case PLAYER -> 1.8;
-            default -> 2.5;
+            default -> 4.0;
         };
-        if (pose == NpcPose.SLEEPING || pose == NpcPose.SWIMMING) {
-            height = 0.6;
-        } else if (pose == NpcPose.CROUCHING) {
+        var registered = manager.bodySize(type);
+        if (registered.isPresent()) {
+            width = Math.max(0.0625, registered.get().width());
+            height = Math.max(0.0625, registered.get().height());
+        }
+        boolean living = type.getEntityClass() != null
+                && org.bukkit.entity.LivingEntity.class.isAssignableFrom(type.getEntityClass());
+        if (pose == NpcPose.SLEEPING && living
+                || type == EntityType.PLAYER && (pose == NpcPose.SWIMMING || pose == NpcPose.FALL_FLYING)) {
+            height = Math.min(height, 0.6);
+        } else if (type == EntityType.PLAYER && pose == NpcPose.CROUCHING) {
             height *= 0.85;
         }
-        double factor = scale * (baby ? 0.5 : 1.0);
+        boolean ageable = type.getEntityClass() != null
+                && org.bukkit.entity.Ageable.class.isAssignableFrom(type.getEntityClass());
+        double factor = scale * (baby && ageable ? 0.5 : 1.0);
         return new double[]{options.width() > 0 ? options.width() : width * factor,
                 options.height() > 0 ? options.height() : height * factor};
     }
@@ -567,7 +579,7 @@ public final class NpcImpl implements Npc {
             equipment.put(slot, next);
         }
         if (!removed) {
-            publishEquipment();
+            publishEquipment(slot);
         }
         return this;
     }
@@ -582,6 +594,7 @@ public final class NpcImpl implements Npc {
         ensureLive();
         List<String> clean = lines == null ? List.of() : List.copyOf(lines);
         if (nametag.equals(clean) && nametagVisible == clean.isEmpty()) return this;
+        boolean respawn = clean.size() != nametagIds.length || nametagVisible != clean.isEmpty();
         int[] stale = nametagIds;
         if (clean.size() != nametagIds.length) {
             int[] ids = new int[clean.size()];
@@ -592,7 +605,7 @@ public final class NpcImpl implements Npc {
         }
         this.nametag = clean;
         this.nametagVisible = clean.isEmpty();
-        refresh(stale);
+        if (respawn) refresh(stale); else publishNametag();
         return this;
     }
 
@@ -972,6 +985,10 @@ public final class NpcImpl implements Npc {
         ensureLive();
         java.util.Objects.requireNonNull(appearance, "appearance");
         if (appearance().equals(appearance)) return this;
+        boolean respawn = !java.util.Objects.equals(glowColor, appearance.glowColor())
+                || collidable != appearance.collidable() || nametagVisible != appearance.nametagVisible();
+        boolean metaChanged = glowing != appearance.glowing() || invisible != appearance.invisible()
+                || skinLayers != appearance.skinLayers();
         boolean clearanceChanged = scale != appearance.scale();
         this.glowing = appearance.glowing();
         this.invisible = appearance.invisible();
@@ -981,7 +998,11 @@ public final class NpcImpl implements Npc {
         this.collidable = appearance.collidable();
         this.nametagVisible = appearance.nametagVisible();
         if (clearanceChanged) invalidateClearance();
-        refresh(nametagIds);
+        if (respawn) refresh(nametagIds);
+        else {
+            if (metaChanged) pushMeta();
+            if (clearanceChanged) publishScale();
+        }
         return this;
     }
 
@@ -1240,9 +1261,10 @@ public final class NpcImpl implements Npc {
             return List.of();
         }
         List<HologramLine> out = new ArrayList<>(lines.size());
+        double baseY = position.y() + nametagLayout.offset()
+                + (nametagLayout.entityRelative() ? dimensions(DEFAULT_NAVIGATION)[1] : 0);
         for (int i = 0; i < lines.size(); i++) {
-            double y = position.y() + (nametagLayout.entityRelative() ? dimensions(NavigationOptions.defaults())[1] : 0)
-                    + nametagLayout.offset() + (lines.size() - 1 - i) * nametagLayout.spacing();
+            double y = baseY + (lines.size() - 1 - i) * nametagLayout.spacing();
             out.add(new HologramLine(ids[i], lines.get(i), position.x(), y, position.z(), style));
         }
         return out;
@@ -1285,8 +1307,11 @@ public final class NpcImpl implements Npc {
         publishNametag();
     }
 
-    private void publishEquipment() {
-        if (batchDepth > 0) dirtyEquipment = true; else manager.updateEquipment(this);
+    private void publishEquipment(EquipmentSlot slot) {
+        if (batchDepth > 0) {
+            dirtyEquipment = true;
+            dirtySlots.add(slot);
+        } else manager.updateEquipment(this, Set.of(slot));
     }
 
     private void publishNametag() {
@@ -1298,6 +1323,8 @@ public final class NpcImpl implements Npc {
         boolean meta = dirtyMeta;
         boolean scaleUpdate = dirtyScale;
         boolean equipmentUpdate = dirtyEquipment;
+        Set<EquipmentSlot> changedSlots = Set.copyOf(dirtySlots);
+        dirtySlots.clear();
         boolean nametagUpdate = dirtyNametag;
         int[] stale = staleLines.stream().mapToInt(Integer::intValue).toArray();
         dirtyRefresh = dirtyMeta = dirtyScale = dirtyEquipment = dirtyNametag = false;
@@ -1308,7 +1335,7 @@ public final class NpcImpl implements Npc {
         } else {
             if (meta) manager.updateMeta(this);
             if (scaleUpdate) manager.updateScale(this);
-            if (equipmentUpdate) manager.updateEquipment(this);
+            if (equipmentUpdate) manager.updateEquipment(this, changedSlots);
             if (nametagUpdate) manager.updateNametag(this);
         }
     }
@@ -1331,6 +1358,7 @@ public final class NpcImpl implements Npc {
         ensureLive();
         java.util.Objects.requireNonNull(viewer, "viewer");
         java.util.Objects.requireNonNull(appearance, "appearance");
+        if (appearance.equals(viewerAppearances.get(viewer))) return this;
         viewerAppearances.put(viewer, appearance);
         manager.refreshViewer(this, viewer);
         return this;
@@ -1359,7 +1387,7 @@ public final class NpcImpl implements Npc {
         String wireName = team ? uuid.toString().replace("-", "") : name;
         String profile = wireName.length() > MAX_PROFILE_NAME ? wireName.substring(0, MAX_PROFILE_NAME) : wireName;
         double shift = nametagLayout.entityRelative()
-                ? dimensions(NavigationOptions.defaults())[1] * (appearance.scale() / scale - 1) : 0;
+                ? dimensions(DEFAULT_NAVIGATION)[1] * (appearance.scale() / scale - 1) : 0;
         List<HologramLine> lines = base.hologram().stream().map(line -> new HologramLine(line.entityId(),
                 line.text(), line.x(), line.y() + shift, line.z(), line.style())).toList();
         return new NpcSnapshot(base.entityId(), base.uuid(), base.name(), profile,

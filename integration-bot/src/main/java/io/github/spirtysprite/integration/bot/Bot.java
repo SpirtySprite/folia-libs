@@ -13,6 +13,7 @@ import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.PlayerListEntry;
 import org.geysermc.mcprotocollib.protocol.data.game.item.ItemStack;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetEquipmentPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerInfoUpdatePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundOpenScreenPacket;
@@ -81,6 +82,9 @@ public final class Bot {
     private boolean clickedMenu;
     private boolean interactedWithNpc;
     private boolean joined;
+    private boolean npcEquipmentSeen;
+    private boolean npcEquipmentCleared;
+    private final java.util.Set<Integer> equippedEntities = new java.util.HashSet<>();
     private String disconnectReason = "";
     private final CountDownLatch finished = new CountDownLatch(1);
 
@@ -167,6 +171,15 @@ public final class Bot {
             add(entities, property(packet, "getType") + " | " + uuid + " | id=" + entityId);
             entityByUuid.put(uuid, entityId);
             interactWithNpcWhenKnown(session);
+        } else if (packet instanceof ClientboundSetEquipmentPacket p) {
+            boolean filled = java.util.Arrays.stream(p.getEquipment())
+                    .anyMatch(equipment -> equipment.getItem() != null && equipment.getItem().getAmount() > 0);
+            if (filled) {
+                equippedEntities.add(p.getEntityId());
+                npcEquipmentSeen = true;
+            } else if (equippedEntities.remove(p.getEntityId())) {
+                npcEquipmentCleared = true;
+            }
         } else if (packet instanceof ClientboundPlayerInfoUpdatePacket p) {
             for (PlayerListEntry entry : p.getEntries()) {
                 String profileName = entry.getProfile() == null ? "?" : entry.getProfile().getName();
@@ -270,6 +283,8 @@ public final class Bot {
     private synchronized void write(Path file, boolean disconnectedByServer) throws IOException {
         Map<String, Object> result = new TreeMap<>();
         result.put("joined", joined);
+        result.put("npcEquipmentSeen", npcEquipmentSeen);
+        result.put("npcEquipmentCleared", npcEquipmentCleared);
         result.put("disconnectedByServer", disconnectedByServer);
         result.put("disconnectReason", disconnectReason);
         result.put("packetCounts", packetCounts);

@@ -15,6 +15,7 @@ All notable changes to FoliaNPC are documented here. The format follows
 - Visibility hysteresis for existing viewers.
 
 ### Fixed
+- Appearance recipes and text-only nametag edits use partial updates; removing equipment sends explicit empty slots.
 - Pending navigation completes on cancellation, replacement, removal, shutdown and search failure.
 - Visibility predicates and viewer updates run on player ownership threads; hidden and stale clicks are rejected.
 - Duplicate UUIDs and creation after shutdown are rejected; equipment and position snapshots are independent and coherent.

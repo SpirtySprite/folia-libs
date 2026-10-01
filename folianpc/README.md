@@ -199,19 +199,19 @@ npc.visibilityHysteresis(3.0);
 `route()` distinguishes route installation from failure; `result()` observes arrival, cancellation,
 replacement, removal or shutdown. Cancelling an observer future does not cancel travel; cancel the
 `MovementTask` itself. The previous two-argument `navigateTo` remains available but is deprecated:
-its boolean reports route installation only. `walkTo` continues to use straight-line movement.
+its boolean reports route installation only and retains the existing solid-ground terrain policy. `walkTo` continues to use straight-line movement.
 
 Searches use immutable snapshots captured on each chunk's owning region and do not read live blocks
 from an asynchronous search. Missing chunks are treated as blocked and are not generated. Budgets
 are bounded to 100000 nodes and a radius of 128 blocks. Terrain policy, rise, drop and optional
-clearance dimensions are configurable. Zero dimensions derive clearance from type, pose, baby state
-and scale. Ground following adjusts the destination's landing height within the rise and drop limits;
+clearance dimensions are configurable. Zero dimensions derive clearance from cached server-registered type bounds, supported poses, baby state
+and scale. If dimensions cannot bind, `diagnose()` reports the conservative fallback. Ground following adjusts the destination's landing height within the rise and drop limits;
 it does not add gravity or live collision handling after a route is installed.
 
 Coordinates, rotations, speed, scale, view distance and proximity radii must be finite. Equipment
 inputs and getters, saved data and packet snapshots are copied independently. A duplicate persisted
 UUID is rejected; remove the existing NPC explicitly before replacing it. A closed service rejects
-creation and marks its existing handles removed. Mutating a removed handle throws `IllegalStateException`.
+creation and marks its existing handles removed. Other mutations on a removed handle throw `IllegalStateException`; navigation tasks report removal or shutdown.
 Visibility predicates execute on each viewer's owning thread. Only tracked players currently shown
 an NPC can interact with it, and stale entity IDs do not invoke handlers. Hysteresis defaults to zero;
 a positive margin extends the hide range only after a player has entered the normal view range.
@@ -314,7 +314,7 @@ npc.navigateTo(target, 4.0).thenAccept(found -> {
 ```
 
 `navigateTo` computes an actual route instead of a straight line, using a simple grid-based A* search
-over the live block data around the NPC:
+over immutable captured terrain around the NPC:
 
 - It considers the 8 horizontal directions from each grid column, checking that both the "feet" and
   "head" blocks are passable and the block below is solid ground.
@@ -331,31 +331,19 @@ over the live block data around the NPC:
   moving, **even if `lookAtPlayers(true)` is set** — the travel-facing rotation takes priority for the
   duration of the walk, and `lookAtPlayers` resumes control the instant the NPC arrives and stops.
 
-This is a simple grid search, not real mob AI: it has no concept of doors, ladders, water, minecarts, or
-multi-block structures, and it will not squeeze through a 1-wide gap it hasn't explicitly modeled as
-open. See [Troubleshooting](#troubleshooting) if a route you'd expect to succeed keeps failing, or if a
+This is a bounded grid search. It does not open doors, climb ladders, swim or use minecarts.
+Hazard avoidance rejects liquids and damaging support. Clearance uses full block occupancy and
+conservative entity dimensions; narrow or unusual shapes may require explicit dimension overrides. See [Troubleshooting](#troubleshooting) if a route you'd expect to succeed keeps failing, or if a
 route that should be blocked isn't.
 
-`navigateTo` returns a `CompletableFuture<Boolean>` because the search itself has to run on a specific
-thread (see below) rather than synchronously on the caller's thread. `false` means the NPC did not
-move at all — either no route was found within the search bounds, or `target` is in a different world
-(cross-world routes are not supported by `navigateTo`; use `teleport` or `walkTo` for that case, exactly
-as with plain `walkTo`). Call `stopWalking()` at any time to cancel a route in progress, exactly as you
-would cancel a plain `walkTo`.
+The deprecated two-argument overload returns a `CompletableFuture<Boolean>` for route installation.
+False covers unreachable or cross-world targets and cancelled setup; search failure completes it
+exceptionally. Use the options overload below to distinguish setup from arrival and observe terminal
+outcomes. `stopWalking()` cancels pending setup as well as active walking.
 
-**Threading detail, because this bit us during development and is worth being explicit about:** reading
-block data (`World.getBlockAt(...)`) is only legal, on Folia and Folia forks, from the region thread
-that actually owns the chunk in question — *not* from the global region thread, which some other
-Folia-aware code (including earlier versions of this library) mistakenly treats as a safe place to do
-arbitrary world reads. Doing so throws (on Canvas, a Folia fork, this surfaces as
-`IllegalStateException: Thread failed main thread check: Cannot read world asynchronously`; other forks
-may phrase it differently, but the underlying rule is the same). `navigateTo` schedules its search via
-`Bukkit.getRegionScheduler().execute(plugin, npcLocation, ...)`, tied to the NPC's own current location,
-which is guaranteed correct for reads within that region. If the route wanders into a neighboring region
-that hasn't merged with the NPC's own, block reads there are best-effort rather than strictly
-guaranteed-safe — the same tradeoff every Folia-aware plugin accepts for any feature that can span
-region boundaries. In practice, regions are large relative to typical NPC walk distances, so this only
-matters for very long routes near a region boundary on a busy, heavily-split server.
+Chunk snapshots are captured through `folia-commons` on each chunk's owning region, including chunks
+across a region boundary. The search then runs asynchronously against those immutable snapshots.
+It never performs live block reads from the NPC's starting region or from the search executor.
 
 ### General movement notes
 
@@ -728,11 +716,12 @@ npc.appearanceFor(player.getUniqueId(), quest);
 npc.clearAppearanceFor(player.getUniqueId());
 ```
 
+Batch callbacks run synchronously on the caller's thread and should contain nonblocking NPC mutations.
 Nested batches flush at the outermost boundary. Unchanged appearance setters do not send packets.
 A batch combines metadata, scale, equipment and nametag updates, or sends one respawn if a change
 requires it. If its callback throws, completed mutations are retained and flushed, then the exception
 propagates. Use batches for presentation changes; movement and action callbacks keep their normal
-behavior. Entity-relative nametags follow conservative type height, pose, baby state and scale.
+behavior. Entity-relative nametags follow registered type height, supported poses, baby state and scale.
 Set `entityRelative` to false for a fixed offset from the NPC's feet.
 
 Viewer overrides inherit unspecified equipment slots; an air item clears an inherited slot. They
@@ -999,13 +988,10 @@ The library handles this for you internally wherever it can:
 - Player positions are snapshotted onto a plain data object (`PlayerTracker.Tracked`) on the player's own
   region thread, and the manager's per-tick visibility pass only ever reads those already-safe
   snapshots — it never calls back into a live `Player`/`Entity` object from the wrong thread.
-- Every packet is sent on the *receiving* player's own region thread, scheduled via
-  `entity.getScheduler()`.
-- Anything that needs to touch **world/block data** rather than an entity (currently: only
-  `navigateTo`'s route search) is scheduled via the **region** scheduler tied to a specific location,
-  which is the correct primitive for that — not the global region thread, which is legal for
-  entity-agnostic, world-agnostic work like dispatching a console command, but is **not** legal for
-  reading blocks (see [Movement](#movement) for the specific exception this throws if you get it wrong).
+- Runtime player callbacks and packet updates run on the receiving player's owning thread,
+  dispatched through `folia-commons`.
+- Terrain snapshots are captured on the owning region of each sampled chunk through `folia-commons`.
+  Route search runs asynchronously and accesses only immutable snapshots.
 - Console commands and anything else that isn't tied to one specific player or one specific chunk run on
   the **global** region scheduler.
 
@@ -1013,9 +999,9 @@ In your own action code (see [Clicks](#clicks)), always prefer the `NpcClickCont
 (`ctx.run`, `ctx.runLater`, `ctx.runGlobal`, `ctx.runAsync`) over calling Bukkit's own scheduler
 directly — they already know which of the above categories your work falls into and route it correctly,
 without you having to reason about Folia's region model yourself. The `Npc` handle itself is safe to
-call from **any** thread at any time; every mutable field behind it is `volatile` or an appropriately
-concurrent collection specifically so that holding an `Npc` reference and calling setters on it from,
-say, an async database callback, is always safe.
+call from any thread. Mutations serialize composite state, and snapshot readers observe coherent
+position and appearance. Removed handles reject mutations while their saved data remains readable.
+
 
 ## Troubleshooting
 
@@ -1046,9 +1032,8 @@ them.
 - `fetchSkin`/`fetchSkinFromUrl` are asynchronous — if you call `npc.skin(...)` at all before the future
   completes, you'll briefly see the default skin. This is expected; there's no synchronous skin-fetch
   path by design (Mojang's API is a real network call).
-- A skin fetch that fails (bad player name, Mojang API down, Mineskin rate limit) never caches the
-  failure, but it also never retroactively applies once it *does* succeed unless you called `.thenAccept`
-  on the returned future in the first place — check you're not silently swallowing the future.
+- Failures are cached for the configured cooldown; rate limits can extend it using `Retry-After`.
+  Use typed fetch results to inspect the cause, and `skinAsync` to apply only the newest request.
 - Mirror mode (`mirrorSkin(true)`) overrides whatever static skin is set, for every viewer, using *their
   own* skin — if you expected a specific static skin and instead everyone sees themselves, mirror mode is
   almost certainly still on.

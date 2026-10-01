@@ -175,6 +175,7 @@ public final class NpcManager {
             Schedulers.onEntity(plugin, tracked.player(), () -> {
                 if (!closed && !npc.removed() && npc.viewers().contains(viewerId)) {
                     NpcSnapshot snapshot = npc.snapshot(viewerId);
+                    backend.removeEntities(tracked.player(), npc.nametagIds());
                     backend.hide(tracked.player(), snapshot);
                     backend.show(tracked.player(), snapshot);
                 }
@@ -186,13 +187,18 @@ public final class NpcManager {
         forEachViewer(npc, backend::updateMeta);
     }
 
+    java.util.Optional<net.folianpc.internal.protocol.BodySize> bodySize(org.bukkit.entity.EntityType type) {
+        return backend.bodySize(type);
+    }
+
     public void updateScale(NpcImpl npc) {
         forEachViewer(npc, (viewer, npcState) -> backend.scale(viewer, npcState.entityId(), npcState.scale()));
     }
 
-    public void updateEquipment(NpcImpl npc) {
+    public void updateEquipment(NpcImpl npc, Set<org.bukkit.inventory.EquipmentSlot> changed) {
+        Set<org.bukkit.inventory.EquipmentSlot> slots = Set.copyOf(changed);
         forEachViewer(npc, (viewer, npcState) ->
-                backend.equip(viewer, npcState.entityId(), npcState.equipment()));
+                backend.equipChanges(viewer, npcState.entityId(), npcState.equipment(), slots));
     }
 
     public void updateNametag(NpcImpl npc) {
@@ -321,6 +327,7 @@ public final class NpcManager {
                 npc.forgetLook(viewerId);
             }
             backend.show(viewer, snapshot);
+            if (show) log("shown '" + npc.name() + "' (id=" + npc.entityId() + ") to " + viewer.getName());
         }
         if (npc.lookAtPlayers() && !npc.moving()) {
             LookAt.Rotation look = LookAt.face(pos.x(), pos.y() + Position.EYE_HEIGHT, pos.z(),
@@ -332,7 +339,8 @@ public final class NpcManager {
     }
 
     public CompletableFuture<Boolean> navigate(NpcImpl npc, Location target, double speed) {
-        return navigate(npc, target, speed, NavigationOptions.defaults()).route().thenCompose(outcome ->
+        return navigate(npc, target, speed, NavigationOptions.builder()
+                .terrain(NavigationOptions.TerrainPolicy.SOLID_GROUND).build()).route().thenCompose(outcome ->
                 outcome.status() == MovementResult.Status.FAILED
                         ? CompletableFuture.failedFuture(outcome.failure().orElseThrow())
                         : CompletableFuture.completedFuture(outcome.status() == MovementResult.Status.ROUTE_FOUND));

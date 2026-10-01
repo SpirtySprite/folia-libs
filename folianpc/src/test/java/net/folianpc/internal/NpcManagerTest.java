@@ -1804,7 +1804,11 @@ class NpcManagerTest {
         npc.nametag(List.of("upper", "lower"));
         assertEquals(66.05, npc.snapshot().hologram().getLast().y(), 1e-6);
         npc.baby(true).scale(2);
-        assertEquals(66.05, npc.snapshot().hologram().getLast().y(), 1e-6);
+        assertEquals(67.85, npc.snapshot().hologram().getLast().y(), 1e-6);
+        npc.type(org.bukkit.entity.EntityType.VILLAGER).baby(false).scale(1);
+        double adultHeight = npc.snapshot().hologram().getLast().y();
+        npc.baby(true).scale(2);
+        assertEquals(adultHeight, npc.snapshot().hologram().getLast().y(), 1e-6);
         npc.type(org.bukkit.entity.EntityType.ENDERMAN).baby(false);
         assertEquals(70.05, npc.snapshot().hologram().getLast().y(), 1e-6);
         npc.nametagLayout(new net.folianpc.api.NametagLayout(0.5, 3, false));
@@ -1892,6 +1896,104 @@ class NpcManagerTest {
         manager.close();
         assertEquals(net.folianpc.api.MovementResult.Status.SHUTDOWN, task.result().join().status());
         assertFalse(npc.moving());
+    }
+
+    @Test
+    void appearanceRecipeAndSameSizeTextChangesSendOnlyRequiredPackets() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.nametag(List.of("before"));
+        manager.tick();
+        backend.shows.clear();
+        npc.batch(target -> target.appearance(new net.folianpc.api.NpcAppearance(true, false, true, 1, null, true, false))
+                .nametag(List.of("after")));
+        assertTrue(backend.shows.isEmpty());
+        assertEquals(1, backend.metas.size());
+        assertEquals(1, backend.hologramRefreshes.size());
+        assertEquals("after", backend.hologramRefreshes.getFirst().hologram().getFirst().text());
+    }
+
+    @Test
+    void clearanceChangesSupersedeCapturedNavigationAndObserverCallbacksCanStartNewRequests() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        CompletableFuture<org.bukkit.Chunk> pending = new CompletableFuture<>();
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false))).thenReturn(pending);
+        var options = net.folianpc.api.NavigationOptions.builder().radius(8).build();
+        var task = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4, options);
+        npc.scale(2);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, task.result().join().status());
+        npc.scale(1);
+        var first = npc.navigateTo(new Location(world, 3.5, 1, 0.5), 4, options);
+        AtomicReference<net.folianpc.api.MovementTask> callback = new AtomicReference<>();
+        first.result().thenAccept(outcome -> callback.set(npc.navigateTo(new Location(world, 2.5, 1, 0.5), 4, options)));
+        var second = npc.navigateTo(new Location(world, 4.5, 1, 0.5), 4, options);
+        assertEquals(net.folianpc.api.MovementResult.Status.SUPERSEDED, second.result().join().status());
+        assertNotNull(callback.get());
+        callback.get().cancel();
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, callback.get().result().join().status());
+    }
+
+    @Test
+    void legacyNavigationRetainsSolidGroundPolicyWhileNewDefaultsAvoidWater() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0.5, 1, 0.5, 0, 0));
+        World world = flatWorld("world");
+        org.bukkit.Material solid = mock(org.bukkit.Material.class);
+        when(solid.isSolid()).thenReturn(true);
+        org.bukkit.Material air = mock(org.bukkit.Material.class);
+        org.bukkit.Material water = mock(org.bukkit.Material.class);
+        when(water.ordinal()).thenReturn(org.bukkit.Material.WATER.ordinal());
+        org.bukkit.Chunk chunk = mock(org.bukkit.Chunk.class);
+        org.bukkit.ChunkSnapshot snapshot = mock(org.bukkit.ChunkSnapshot.class);
+        when(snapshot.getBlockType(anyInt(), anyInt(), anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return y <= 0 ? solid : x == 1 && z == 0 && y == 1 ? water : air;
+        });
+        when(chunk.getChunkSnapshot(false, false, false)).thenReturn(snapshot);
+        when(world.getChunkAtAsync(anyInt(), anyInt(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(CompletableFuture.completedFuture(chunk));
+        Location destination = new Location(world, 1.5, 1, 0.5);
+        assertTrue(npc.navigateTo(destination, 4).join());
+        var safe = npc.navigateTo(destination, 4, net.folianpc.api.NavigationOptions.builder().radius(8).build());
+        assertEquals(net.folianpc.api.MovementResult.Status.UNREACHABLE, safe.result().join().status());
+    }
+
+    @Test
+    void equipmentBatchesRetainChangedSlotsIncludingExplicitClears() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        Player viewer = player(UUID.randomUUID());
+        track(viewer, "world", 0, 64, 1);
+        npc.equipment(EquipmentSlot.HAND, mutableItem(2));
+        manager.tick();
+        npc.batch(target -> target.equipment(EquipmentSlot.HAND, null)
+                .equipment(EquipmentSlot.OFF_HAND, mutableItem(3)));
+        assertEquals(1, backend.equips.size());
+        assertEquals(Set.of(EquipmentSlot.HAND, EquipmentSlot.OFF_HAND), backend.equipmentChanges.getFirst());
+        assertFalse(backend.equips.getFirst().equipment().containsKey(EquipmentSlot.HAND));
+        assertEquals(3, backend.equips.getFirst().equipment().get(EquipmentSlot.OFF_HAND).getAmount());
+        npc.equipment(EquipmentSlot.OFF_HAND, null);
+        assertEquals(Set.of(EquipmentSlot.OFF_HAND), backend.equipmentChanges.getLast());
+        assertTrue(backend.equips.getLast().equipment().isEmpty());
+    }
+
+    @Test
+    void registeredDimensionsDriveClearanceAndNametagsWithoutShrinkingUnsupportedPoses() {
+        backend.sizes.put(org.bukkit.entity.EntityType.POLAR_BEAR, new net.folianpc.internal.protocol.BodySize(1.4, 1.4));
+        NpcImpl npc = manager.create(UUID.randomUUID(), "Bear", org.bukkit.entity.EntityType.POLAR_BEAR,
+                new Position("world", 0.5, 1, 0.5, 0, 0));
+        npc.nametag(List.of("bear"));
+        var options = net.folianpc.api.NavigationOptions.defaults();
+        assertEquals(1.4, npc.dimensions(options)[0]);
+        assertEquals(1.4, npc.dimensions(options)[1]);
+        npc.pose(net.folianpc.api.NpcPose.SWIMMING);
+        assertEquals(1.4, npc.dimensions(options)[1]);
+        npc.baby(true).scale(2);
+        assertEquals(1.4, npc.dimensions(options)[0]);
+        assertEquals(2.65, npc.snapshot().hologram().getFirst().y(), 1e-6);
+        assertEquals(0.5, npc.dimensions(net.folianpc.api.NavigationOptions.builder().dimensions(0.5, 0.75).build())[0]);
     }
 
 }

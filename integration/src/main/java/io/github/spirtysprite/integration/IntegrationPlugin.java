@@ -345,7 +345,9 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                             ticks++;
                             boolean allClicked = menuClicks.get() > 0 && npcClicks.contains("LEFT") && npcClicks.contains("RIGHT");
                             if ((ticks == 400 || allClicked && ticks >= 100) && finishing.compareAndSet(false, true)) {
-                                GuiScenario.run(gui, player, scheduler).whenComplete((guiResult, guiFailure) -> {
+                                NpcScenario.run(npc, player, scheduler).thenCompose(npcResult ->
+                                        GuiScenario.run(gui, player, scheduler).thenApply(guiResult -> npcResult + "; " + guiResult))
+                                        .whenComplete((guiResult, guiFailure) -> {
                                     scheduler.runForEntity(player, () -> {
                                         expectedDisconnect.set(true);
                                         player.kick(net.kyori.adventure.text.Component.text("integration done"));

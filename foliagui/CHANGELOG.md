@@ -6,6 +6,13 @@ All notable changes to FoliaGUI are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-01
+
+### Fixed
+- No menu reacted to clicks on Paper versions that lack `UncheckedSignChangeEvent` (for example 1.21.4): Bukkit
+  refused to register the whole listener. The sign handler now lives in its own `SignChangeListener`, which is only
+  registered when the event exists.
+
 ### Changed
 - Depends on folia-commons (`net.foliacommons:folia-commons`) for scheduling, server version detection and
   legacy colour conversion. Shade and relocate it together with this library.

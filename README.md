@@ -30,7 +30,7 @@ The libraries are published through [JitPack](https://jitpack.io). Use the group
     <dependency>
         <groupId>com.github.SpirtySprite.folia-libs</groupId>
         <artifactId>foliagui-api</artifactId>
-        <version>foliagui-v1.0.0</version>
+        <version>foliagui-v1.2.0</version>
     </dependency>
 </dependencies>
 ```

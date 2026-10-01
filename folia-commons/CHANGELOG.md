@@ -6,7 +6,7 @@ All notable changes to folia-commons are documented here. The format follows
 
 ## [Unreleased]
 
-## [1.0.0]
+## [1.0.0] - 2026-10-01
 
 ### Added
 - `Scheduler` and `TaskHandle`: one scheduling API for Folia and Paper, bound to a plugin, with a

@@ -86,6 +86,6 @@ Each module is released on its own.
 
 1. In the module's `CHANGELOG.md`, move the "Unreleased" notes under a new `## [x.y.z]` heading.
 2. Set the module's version in its `pom.xml` to `x.y.z`.
-3. Tag the commit `<module>-vx.y.z` (for example `foliagui-v1.1.0`) and push the tag. The release workflow
+3. Tag the commit `<module>-vx.y.z` (for example `foliagui-v1.2.0`) and push the tag. The release workflow
    checks that the tag matches the pom, builds the module and what it depends on, and publishes a GitHub
    release with the jars and the changelog notes.

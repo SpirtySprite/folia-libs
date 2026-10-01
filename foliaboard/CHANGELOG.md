@@ -6,6 +6,8 @@ All notable changes to FoliaBoard are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-01
+
 ### Changed
 - Depends on folia-commons (`net.foliacommons:folia-commons`) for scheduling, server version detection and
   legacy colour conversion. Shade and relocate it together with this library.

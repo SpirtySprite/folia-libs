@@ -6,6 +6,18 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-01
+
+### Fixed
+- Villager data (type, profession, level) failed to bind on servers older than 1.21.5, where the constructor takes
+  plain registry values instead of holders. Both forms are handled.
+- Registry lookups (mob variants, villager data) are now resolved on 1.20.6, where they were silently disabled.
+
+### Performance
+- The visibility pass only examines players within an NPC's view distance (or proximity radius). Players are
+  sorted into 32 block squares once per pass. 10,000 NPCs with 500 players spread over a large world take
+  about 3 ms per pass instead of about 48 ms. Worlds with 16 players or fewer are scanned in full as before.
+
 ### Changed
 - Depends on folia-commons (`net.foliacommons:folia-commons`) for scheduling, server version detection and
   legacy colour conversion. Shade and relocate it together with this library.

@@ -12,4 +12,5 @@ install:
       || sdk install java 21.0.4-tem < /dev/null
     export JAVA_HOME="$HOME/.sdkman/candidates/java/current"
     java -version
+    sh scripts/jitpack-prepare.sh
     sh ./mvnw -DskipTests clean install

@@ -6,6 +6,13 @@ All notable changes to folia-commons are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-01
+
+### Fixed
+- JitPack publication resolves shared module dependencies under the same release version.
+
+## [1.1.0] - 2026-10-01
+
 ### Added
 - Structured, immutable diagnostic entries with optional sections and explanations.
 - Experimental location result calls, cancellable delayed entity/global/async work, and task groups.

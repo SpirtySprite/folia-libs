@@ -6,6 +6,13 @@ All notable changes to FoliaBoard are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-01
+
+### Fixed
+- JitPack publication resolves shared module dependencies under the same release version.
+
+## [1.3.0] - 2026-10-01
+
 ### Added
 - Experimental coordinated text/item nametag compositions, immutable profiles and atomic layout
   updates, owner-region sampling, independent refresh periods, priority layers, distance styling,
@@ -34,6 +41,7 @@ All notable changes to FoliaBoard are documented here. The format follows
 - Evict individual parsed text entries while preserving recently used values.
 
 ### Changed
+- Depends on folia-commons 1.1.0 for the shared scheduling, lifecycle and text primitives.
 - Text parsing and serialization use shared folia-commons primitives, preserving wrapper behavior and caching.
 
 ## [1.2.0] - 2026-10-01

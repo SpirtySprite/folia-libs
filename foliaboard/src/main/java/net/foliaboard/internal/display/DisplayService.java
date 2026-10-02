@@ -115,13 +115,16 @@ public final class DisplayService implements Displays {
         if (!started) {
             started = true;
             Schedulers.global(runtime.plugin(), () -> {
-                for (Player player : List.copyOf(Bukkit.getOnlinePlayers())) onJoin(player);
+                synchronized (DisplayService.this) {
+                    if (closed || !started || handles.isEmpty()) return;
+                    for (Player player : List.copyOf(Bukkit.getOnlinePlayers())) onJoin(player);
+                }
             });
         }
     }
 
     public synchronized void onJoin(Player player) {
-        if (closed || runtime.closed() || !supported()) return;
+        if (closed || runtime.closed() || !supported() || !started && handles.isEmpty()) return;
         UUID id = player.getUniqueId();
         Session current = sessions.get(id);
         if (current != null && current.player == player) return;
@@ -428,6 +431,10 @@ public final class DisplayService implements Displays {
                 eligible.clear();
                 owner = null;
                 fixed = null;
+                if (handles.isEmpty()) {
+                    started = false;
+                    for (Session session : List.copyOf(sessions.values())) retire(session);
+                }
             }
         }
     }

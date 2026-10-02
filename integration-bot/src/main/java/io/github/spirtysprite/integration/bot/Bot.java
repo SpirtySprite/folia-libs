@@ -91,6 +91,17 @@ public final class Bot {
     private boolean reviewNametagMoved;
     private boolean npcEquipmentSeen;
     private boolean npcEquipmentCleared;
+    private final java.util.Set<Integer> boardDisplays = new java.util.HashSet<>();
+    private final java.util.Set<Integer> boardItems = new java.util.HashSet<>();
+    private final java.util.Set<Integer> nativePassengers = new java.util.HashSet<>();
+    private final java.util.Set<Integer> activeBoardDisplays = new java.util.HashSet<>();
+    private boolean boardFixedText;
+    private boolean boardPassengerMounted;
+    private boolean boardNativePassengerPreserved;
+    private boolean boardSelfHidden = true;
+    private int boardPassengerSpawns;
+    private String loginName;
+    private int boardOtherOwnerSpawns;
     private final java.util.Set<Integer> equippedEntities = new java.util.HashSet<>();
     private String disconnectReason = "";
     private final CountDownLatch finished = new CountDownLatch(1);
@@ -107,6 +118,7 @@ public final class Bot {
         long maxSeconds = args.length > 4 ? Long.parseLong(args[4]) : 90;
 
         Bot bot = new Bot();
+        bot.loginName = name;
         ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "bot-packets");
             thread.setDaemon(true);
@@ -143,6 +155,41 @@ public final class Bot {
         packetCounts.merge(packet.getClass().getSimpleName(), 1, Integer::sum);
         if (packet instanceof ClientboundLoginPacket) {
             joined = true;
+        } else if (packet.getClass().getSimpleName().equals("ClientboundPlayerCombatKillPacket")) {
+            session.send(new org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundClientCommandPacket(
+                    org.geysermc.mcprotocollib.protocol.data.game.ClientCommand.RESPAWN));
+        } else if (packet.getClass().getSimpleName().equals("ClientboundRespawnPacket")) {
+            activeBoardDisplays.clear();
+        } else if (packet.getClass().getSimpleName().equals("ClientboundSetEntityDataPacket")) {
+            int id = ((Number) property(packet, "getEntityId")).intValue();
+            for (Object metadata : (Object[]) property(packet, "getMetadata")) {
+                Object value;
+                try {
+                    value = metadata.getClass().getMethod("getValue").invoke(metadata);
+                } catch (ReflectiveOperationException failure) {
+                    throw new IllegalStateException("Cannot read entity metadata", failure);
+                }
+                if (value instanceof Component component) {
+                    String text = plain(component);
+                    UUID ownUuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + loginName).getBytes(StandardCharsets.UTF_8));
+                    if (text.equals("BoardNeverSelf") || text.equals("BoardOtherOwner:" + ownUuid)) boardSelfHidden = false;
+                    if (text.equals("BoardFixedText") || text.equals("BoardPassengerVisible") || text.equals("BoardPeerPassenger")
+                            || text.startsWith("BoardOtherOwner:")) {
+                        boolean fresh = boardDisplays.add(id);
+                        activeBoardDisplays.add(id);
+                        if (text.equals("BoardFixedText")) boardFixedText = true;
+                        if (fresh && text.equals("BoardPassengerVisible")) boardPassengerSpawns++;
+                        if (fresh && text.startsWith("BoardOtherOwner:")) boardOtherOwnerSpawns++;
+                    }
+                }
+            }
+        } else if (packet.getClass().getSimpleName().equals("ClientboundSetPassengersPacket")) {
+            int[] ids = (int[]) property(packet, "getPassengerIds");
+            boolean virtual = java.util.Arrays.stream(ids).anyMatch(id -> boardDisplays.contains(id) || boardItems.contains(id));
+            if (virtual) boardPassengerMounted = true;
+            if (virtual && java.util.Arrays.stream(ids).anyMatch(nativePassengers::contains)) boardNativePassengerPreserved = true;
+        } else if (packet.getClass().getSimpleName().equals("ClientboundRemoveEntitiesPacket")) {
+            for (int id : (int[]) property(packet, "getEntityIds")) activeBoardDisplays.remove(id);
         } else if (packet instanceof ClientboundSetObjectivePacket p) {
             add(objectives, p.getName() + " | " + p.getAction() + " | " + plain(p.getDisplayName()));
             if (p.getAction().name().equals("REMOVE")) {
@@ -175,6 +222,11 @@ public final class Bot {
         } else if (packet.getClass().getSimpleName().equals("ClientboundAddEntityPacket")) {
             UUID uuid = (UUID) property(packet, "getUuid");
             int entityId = ((Number) property(packet, "getEntityId")).intValue();
+            if (property(packet, "getType").toString().equals("ITEM_DISPLAY")) {
+                boardItems.add(entityId);
+                activeBoardDisplays.add(entityId);
+            }
+            if (property(packet, "getType").toString().equals("ARMOR_STAND")) nativePassengers.add(entityId);
             add(entities, property(packet, "getType") + " | " + uuid + " | id=" + entityId);
             entityByUuid.put(uuid, entityId);
             double x = ((Number) property(packet, "getX")).doubleValue();
@@ -309,6 +361,14 @@ public final class Bot {
         result.put("npcNametagMoved", reviewNametagMoved);
         result.put("npcEquipmentSeen", npcEquipmentSeen);
         result.put("npcEquipmentCleared", npcEquipmentCleared);
+        result.put("boardFixedText", boardFixedText);
+        result.put("boardItems", boardItems.size());
+        result.put("boardPassengerMounted", boardPassengerMounted);
+        result.put("boardNativePassengerPreserved", boardNativePassengerPreserved);
+        result.put("boardSelfHidden", boardSelfHidden);
+        result.put("boardPassengerSpawns", boardPassengerSpawns);
+        result.put("boardActiveDisplays", activeBoardDisplays.size());
+        result.put("boardOtherOwnerSpawns", boardOtherOwnerSpawns);
         result.put("disconnectedByServer", disconnectedByServer);
         result.put("disconnectReason", disconnectReason);
         result.put("packetCounts", packetCounts);

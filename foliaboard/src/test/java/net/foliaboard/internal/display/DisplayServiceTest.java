@@ -178,7 +178,7 @@ class DisplayServiceTest {
         Player reconnect = player(owner.getUniqueId());
         displays.onJoin(reconnect);
         displays.onQuit(owner);
-        assertEquals(2, displays.stats().viewers());
+        assertEquals(0, displays.stats().viewers());
         assertThrows(IllegalStateException.class, tag::refresh);
     }
 

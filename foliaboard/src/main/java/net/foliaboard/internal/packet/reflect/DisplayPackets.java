@@ -75,7 +75,7 @@ public final class DisplayPackets {
         Class<?> friendly = Reflect.clazz("net.minecraft.network.FriendlyByteBuf");
         buffer = Reflect.constructor(friendly, byteBuf);
         wrappedBuffer = Reflect.method(Reflect.clazz("io.netty.buffer.Unpooled"), "wrappedBuffer", byte[].class);
-        release = Reflect.methodByNameDeep(byteBuf, "release", 0);
+        release = Reflect.method(Reflect.clazz("io.netty.util.ReferenceCounted"), "release");
         passengers = Reflect.constructor(packet("ClientboundSetPassengersPacket"), friendly);
         Class<?> change;
         try {
@@ -223,7 +223,8 @@ public final class DisplayPackets {
         }
         Object netty = Reflect.invoke(wrappedBuffer, null, bytes.toByteArray());
         try {
-            return Reflect.instantiate(constructor, Reflect.instantiate(buffer, netty));
+            Object friendly = Reflect.instantiate(buffer, netty);
+            return Reflect.instantiate(constructor, friendly);
         } finally {
             Reflect.invoke(release, netty);
         }

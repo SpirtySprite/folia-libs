@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 public final class NmsDisplayTransport implements DisplayTransport {
@@ -95,6 +96,8 @@ public final class NmsDisplayTransport implements DisplayTransport {
         private final Object pipeline;
         private final Method send;
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final AtomicBoolean drainScheduled = new AtomicBoolean();
+        private final AtomicReference<List<DisplayFrame>> pending = new AtomicReference<>();
         private final Map<UUID, Rendered> rendered = new HashMap<>();
         private final Map<Integer, int[]> nativePassengers = new HashMap<>();
         private final Set<Integer> missingVehicles = new HashSet<>();
@@ -123,7 +126,12 @@ public final class NmsDisplayTransport implements DisplayTransport {
                         Object context = args[0];
                         Object[] forwarded = Arrays.copyOfRange(args, 1, args.length);
                         if (name.equals("write")) {
-                            forwarded[0] = rewrite(forwarded[0]);
+                            try {
+                                forwarded[0] = rewrite(forwarded[0]);
+                            } catch (RuntimeException failure) {
+                                failures.accept(failure);
+                                close();
+                            }
                         }
                         String destination = name.equals("exceptionCaught") ? "fireExceptionCaught" : name;
                         call(context, destination, forwarded);
@@ -135,38 +143,58 @@ public final class NmsDisplayTransport implements DisplayTransport {
 
         @Override
         public void present(List<DisplayFrame> frames) {
-            List<DisplayFrame> snapshot = List.copyOf(frames);
+            if (closed.get()) return;
+            pending.set(List.copyOf(frames));
+            drain();
+        }
+
+        private void drain() {
+            if (!drainScheduled.compareAndSet(false, true)) return;
             execute(() -> {
-                if (closed.get() || !installed) return;
-                Set<UUID> accepted = new HashSet<>();
-                for (DisplayFrame frame : snapshot) {
-                    if (!frame.accepted().getAsBoolean() || missingVehicles.contains(frame.vehicle())) continue;
-                    accepted.add(frame.id());
-                    Rendered previous = rendered.get(frame.id());
-                    if (previous != null && (previous.frame().generation() != frame.generation()
-                            || !previous.frame().world().equals(frame.world()) || previous.frame().vehicle() != frame.vehicle())) {
-                        erase(frame.id());
-                        previous = null;
-                    }
-                    if (previous == null) {
-                        if (frame.vehicle() >= 0) nativePassengers.putIfAbsent(frame.vehicle(),
-                                frame.nativePassengers().stream().mapToInt(Integer::intValue).toArray());
-                        int id = packets.nextId();
-                        write(packets.spawn(id, UUID.randomUUID(), frame));
-                        write(packets.metadata(id, frame));
-                        rendered.put(frame.id(), new Rendered(id, frame));
-                        if (frame.vehicle() >= 0) mount(frame.vehicle());
-                    } else {
-                        if (!sameMetadata(previous.frame(), frame)) write(packets.metadata(previous.entity(), frame));
-                        if (frame.vehicle() < 0 && !samePosition(previous.frame(), frame)) write(packets.move(previous.entity(), frame));
-                        rendered.put(frame.id(), new Rendered(previous.entity(), frame));
-                    }
+                try {
+                    List<DisplayFrame> snapshot = pending.getAndSet(null);
+                    if (!closed.get() && installed && snapshot != null) apply(snapshot);
+                } finally {
+                    drainScheduled.set(false);
+                    if (!closed.get() && pending.get() != null) drain();
                 }
-                for (UUID id : List.copyOf(rendered.keySet())) {
-                    if (!accepted.contains(id)) erase(id);
-                }
-                count = rendered.size();
             });
+        }
+
+        private void apply(List<DisplayFrame> snapshot) {
+            Set<Integer> relevantVehicles = new HashSet<>();
+            for (DisplayFrame frame : snapshot) {
+                if (frame.vehicle() >= 0) relevantVehicles.add(frame.vehicle());
+            }
+            missingVehicles.retainAll(relevantVehicles);
+            Set<UUID> accepted = new HashSet<>();
+            for (DisplayFrame frame : snapshot) {
+                if (!frame.accepted().getAsBoolean() || missingVehicles.contains(frame.vehicle())) continue;
+                accepted.add(frame.id());
+                Rendered previous = rendered.get(frame.id());
+                if (previous != null && (previous.frame().generation() != frame.generation()
+                        || !previous.frame().world().equals(frame.world()) || previous.frame().vehicle() != frame.vehicle())) {
+                    erase(frame.id());
+                    previous = null;
+                }
+                if (previous == null) {
+                    if (frame.vehicle() >= 0) nativePassengers.putIfAbsent(frame.vehicle(),
+                            frame.nativePassengers().stream().mapToInt(Integer::intValue).toArray());
+                    int id = packets.nextId();
+                    rendered.put(frame.id(), new Rendered(id, frame));
+                    write(packets.spawn(id, UUID.randomUUID(), frame));
+                    write(packets.metadata(id, frame));
+                    if (frame.vehicle() >= 0) mount(frame.vehicle());
+                } else {
+                    if (!sameMetadata(previous.frame(), frame)) write(packets.metadata(previous.entity(), frame));
+                    if (frame.vehicle() < 0 && !samePosition(previous.frame(), frame)) write(packets.move(previous.entity(), frame));
+                    rendered.put(frame.id(), new Rendered(previous.entity(), frame));
+                }
+            }
+            for (UUID id : List.copyOf(rendered.keySet())) {
+                if (!accepted.contains(id)) erase(id);
+            }
+            count = rendered.size();
         }
 
         private Object rewrite(Object packet) {
@@ -189,8 +217,11 @@ public final class NmsDisplayTransport implements DisplayTransport {
                 int vehicle = Reflect.invoke(passengerVehicle, packet);
                 int[] actual = Reflect.invoke(passengerIds, packet);
                 if (hasVehicle(vehicle)) {
-                    nativePassengers.put(vehicle, actual.clone());
-                    return packets.passengers(vehicle, PassengerLists.merge(actual, mounted(vehicle)));
+                    Set<Integer> owned = new HashSet<>();
+                    rendered.values().forEach(value -> owned.add(value.entity()));
+                    int[] external = Arrays.stream(actual).filter(id -> !owned.contains(id)).toArray();
+                    nativePassengers.put(vehicle, external);
+                    return packets.passengers(vehicle, PassengerLists.merge(external, mounted(vehicle)));
                 }
             } else if (removeClass.isInstance(packet)) {
                 Object raw = Reflect.invoke(removedIds, packet);
@@ -214,7 +245,12 @@ public final class NmsDisplayTransport implements DisplayTransport {
                     return Reflect.instantiate(bundle, List.of(packet, packets.remove(virtual.stream().mapToInt(Integer::intValue).toArray())));
                 }
             } else if (addClass.isInstance(packet)) {
-                missingVehicles.remove(Reflect.<Integer>invoke(addedId, packet));
+                int vehicle = Reflect.invoke(addedId, packet);
+                missingVehicles.remove(vehicle);
+                if (hasVehicle(vehicle)) {
+                    return Reflect.instantiate(bundle, List.of(packet, packets.passengers(vehicle,
+                            PassengerLists.merge(nativePassengers.getOrDefault(vehicle, new int[0]), mounted(vehicle)))));
+                }
             } else if (respawnClass.isInstance(packet)) {
                 rendered.clear();
                 nativePassengers.clear();
@@ -265,10 +301,12 @@ public final class NmsDisplayTransport implements DisplayTransport {
                         task.run();
                     } catch (RuntimeException failure) {
                         failures.accept(failure);
+                        close();
                     }
                 });
             } catch (RuntimeException failure) {
                 failures.accept(failure);
+                closed.set(true);
             }
         }
 
@@ -280,16 +318,27 @@ public final class NmsDisplayTransport implements DisplayTransport {
         @Override
         public void close() {
             if (!closed.compareAndSet(false, true)) return;
+            pending.set(null);
             execute(() -> {
-                for (UUID id : List.copyOf(rendered.keySet())) erase(id);
-                count = 0;
-                if (installed) {
-                    call(pipeline, "remove", handlerName);
-                    installed = false;
+                try {
+                    for (UUID id : List.copyOf(rendered.keySet())) {
+                        try {
+                            erase(id);
+                        } catch (RuntimeException failure) {
+                            failures.accept(failure);
+                        }
+                    }
+                } finally {
+                    rendered.clear();
+                    count = 0;
+                    if (installed) {
+                        call(pipeline, "remove", handlerName);
+                        installed = false;
+                    }
+                    nativePassengers.clear();
+                    missingVehicles.clear();
+                    ownMounts.clear();
                 }
-                nativePassengers.clear();
-                missingVehicles.clear();
-                ownMounts.clear();
             });
         }
     }

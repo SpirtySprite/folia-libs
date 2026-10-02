@@ -14,7 +14,7 @@ public interface ManagedDisplay extends AutoCloseable {
     /** Stable library identifier, independent of recreated client entity identifiers. */
     UUID id();
 
-    /** Replaces rendering properties. Queued presentation uses the latest accepted value. */
+    /** Replaces rendering properties for subsequent asynchronous presentation ticks. */
     void style(DisplayStyle style);
 
     /** Replaces the persistent visibility policy. Self visibility can change only through this explicit policy. */

@@ -87,7 +87,7 @@ generate-structures=false
 spawn-protection=0
 view-distance=2
 simulation-distance=2
-max-players=2
+max-players=8
 motd=folia-libs integration test
 enable-command-block=false
 spawn-monsters=false
@@ -99,6 +99,7 @@ PORT="${IT_PORT:-25599}"
 sed -i.bak "s/__PORT__/$PORT/" "$RUN/server.properties" && rm -f "$RUN/server.properties.bak"
 BOT_JAR="${BOT_JAR:-}"
 BOT_FLAG=false
+DISPLAY_TWO_VIEWER="${DISPLAY_TWO_VIEWER:-false}"
 if [ -n "$BOT_JAR" ]; then
   [ -f "$BOT_JAR" ] || { echo "Bot jar not found: $BOT_JAR" >&2; exit 2; }
   BOT_FLAG=true
@@ -109,7 +110,7 @@ set +e
 (
   cd "$RUN"
   exec java -Xmx1G -Dcom.mojang.eula.agree=true \
-    -Dit.expect.folia="$EXPECT_FOLIA" -Dit.expect.version="$VERSION" -Dit.bot="$BOT_FLAG" \
+    -Dit.expect.folia="$EXPECT_FOLIA" -Dit.expect.version="$VERSION" -Dit.bot="$BOT_FLAG" -Dit.display.two="$DISPLAY_TWO_VIEWER" \
     -jar server.jar --nogui < /dev/null > server.log 2>&1
 ) &
 SERVER_PID=$!
@@ -124,6 +125,17 @@ if [ "$BOT_FLAG" = true ]; then
   done
   if kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "Joining with the test bot"
+    if [ "$DISPLAY_TWO_VIEWER" = true ]; then
+      (
+        for attempt in $(seq 1 100); do
+          grep -q DISPLAY_TWO_VIEWER_READY "$RUN/server.log" && break
+          kill -0 "$SERVER_PID" 2>/dev/null || exit 1
+          sleep 1
+        done
+        java -jar "$BOT_JAR" 127.0.0.1 "$PORT" "$RUN/observer-result.json" ItObserver 100 > "$RUN/observer.log" 2>&1
+      ) &
+      OBSERVER_PID=$!
+    fi
     java -jar "$BOT_JAR" 127.0.0.1 "$PORT" "$RUN/bot-result.json" ItBot 100 > "$RUN/bot.log" 2>&1 || true
   fi
 fi
@@ -141,6 +153,7 @@ while kill -0 "$SERVER_PID" 2>/dev/null; do
   waited=$((waited + 2))
 done
 wait "$SERVER_PID" 2>/dev/null
+if [ "$DISPLAY_TWO_VIEWER" = true ] && [ -n "${OBSERVER_PID:-}" ]; then wait "$OBSERVER_PID" 2>/dev/null; fi
 set -e
 
 show_log_tail() { echo "---- last lines of $RUN/server.log ----"; tail -n 60 "$RUN/server.log"; }
@@ -196,6 +209,12 @@ need(abs(seen["npcArrivalMovement"] - 0.25) < 1e-6, "received final NPC movement
 need(seen["npcNametagMoved"], "received existing nametag display position update")
 need(seen["npcEquipmentSeen"], "received NPC equipment")
 need(seen["npcEquipmentCleared"], "received an explicit NPC equipment clear")
+need(seen["boardFixedText"] and seen["boardItems"] > 0, "received managed text and item displays")
+need(seen["boardPassengerMounted"], "received client passenger attachments")
+need(seen["boardNativePassengerPreserved"], "client passenger attachments preserved a native passenger")
+need(seen["boardSelfHidden"], "never received owner-hidden display text")
+need(seen["boardPassengerSpawns"] >= 4, "passenger display was recreated after teleports")
+need(seen["boardActiveDisplays"] == 0, "managed client displays were removed")
 need(any("GENERIC_9X3" in line and "Integration Menu" in line for line in seen["screens"]), "was shown the 3 row menu 'Integration Menu'")
 need(any("container=1" in line and "filled=1" in line for line in seen["containerContents"]), "received the menu's item")
 if sys.argv[2]:
@@ -221,6 +240,20 @@ if sys.argv[2]:
     need(any(line.startswith("tab | BoardFixtureB |") for line in seen["presentationEvents"])
          and not any(line == "tab |  | " for line in seen["presentationEvents"]), "closing the first copy preserved the second copy's tab header")
 sys.exit(1 if problems else 0)
+PY
+fi
+
+if [ "$DISPLAY_TWO_VIEWER" = true ]; then
+  python3 - "$RUN/bot-result.json" "$RUN/observer-result.json" <<'PY' || STATUS=$?
+import json, sys
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as source:
+        seen = json.load(source)
+    assert seen["boardSelfHidden"], f"owner-hidden text appeared: {path}"
+    assert seen["boardOtherOwnerSpawns"] > 0, f"remote nametag never appeared: {path}"
+    assert seen["boardPassengerMounted"], f"remote nametag was not mounted: {path}"
+    assert seen["boardActiveDisplays"] == 0, f"remote displays remained: {path}"
+    print(f"  PASS  remote display client: {path}")
 PY
 fi
 

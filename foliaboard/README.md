@@ -68,6 +68,17 @@ scale, lighting, interpolation, shadow, culling dimensions and glow. Item displa
 Minecraft item rendering context. The API targets the repository's existing 1.20.6 to 1.21.11
 range and adds no dependencies.
 
+The integration client checks received display metadata, passenger packets and final cleanup.
+Enable the second client to check remote nametags, self hiding, death/respawn and region transfers:
+
+```sh
+DISPLAY_TWO_VIEWER=true BOT_JAR="$PWD/integration-bot/target/folia-integration-bot.jar" \
+  integration/scripts/run-server-test.sh folia 1.21.11
+```
+
+Build the integration plugin and matching protocol client first, as described in
+[CONTRIBUTING.md](../CONTRIBUTING.md#tests-on-real-servers).
+
 A **Folia-native, packet-level scoreboard API** for Paper & Folia. It removes the single hardest part
 of scoreboards on Folia — knowing *which thread* may touch a player's board and not racing when they
 move between regions — and gives you a fluent, MiniMessage-first API where **every call is safe from
@@ -119,6 +130,7 @@ board.createBoard(player)
 19. [API reference](#api-reference)
 20. [Version support & the honest caveat](#version-support--the-honest-caveat)
 21. [Building from source](#building-from-source)
+22. [Managed text and item displays](#managed-text-and-item-displays)
 
 ---
 

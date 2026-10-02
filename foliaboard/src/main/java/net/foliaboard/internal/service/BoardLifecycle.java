@@ -51,6 +51,10 @@ public final class BoardLifecycle {
         if (!runtime.closed()) displays.onTransition(player);
     }
 
+    public void onEntityTransition(org.bukkit.entity.Entity entity) {
+        if (!runtime.closed()) displays.onTransition(entity);
+    }
+
     public void onQuit(@NotNull Player player) {
         sidebars.onQuit(player);
         displays.onQuit(player);

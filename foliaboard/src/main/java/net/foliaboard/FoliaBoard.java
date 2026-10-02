@@ -80,6 +80,7 @@ public final class FoliaBoard {
         this.nametags = new NametagService(runtime);
         this.objectives = new ObjectiveService(runtime);
         this.displays = new DisplayService(runtime);
+        displays.vanillaLeases(nametags::leaseVisibility);
         this.lifecycle = new BoardLifecycle(runtime, boards, tabs, bossBars, nametags, objectives, displays);
         this.listener = new FoliaBoardListener(lifecycle, plugin, this::close);
     }

@@ -32,6 +32,13 @@ public final class NametagImpl implements Nametag {
     private final Set<UUID> receivers = ConcurrentHashMap.newKeySet();
     private volatile boolean removed = false;
     private volatile NametagResolver viewerResolver;
+    private long mutationVersion;
+    private long visibilityVersion;
+    private int visibilityLeases;
+    private TeamData.Visibility restoreVisibility;
+    private long leaseVisibilityVersion;
+    private long leaseMutationVersion;
+    private boolean leaseCreated;
 
     public NametagImpl(Plugin plugin, PacketAdapter adapter, Player target, String teamName,
                        Supplier<Collection<? extends Player>> onlinePlayers) {
@@ -59,38 +66,70 @@ public final class NametagImpl implements Nametag {
 
     @Override
     public synchronized @NotNull Nametag prefix(@NotNull ComponentLike prefix) {
+        mutationVersion++;
         data.prefix(prefix.asComponent());
         return this;
     }
 
     @Override
     public synchronized @NotNull Nametag suffix(@NotNull ComponentLike suffix) {
+        mutationVersion++;
         data.suffix(suffix.asComponent());
         return this;
     }
 
     @Override
     public synchronized @NotNull Nametag color(@Nullable NamedTextColor color) {
+        mutationVersion++;
         data.color(color);
         return this;
     }
 
     @Override
     public synchronized @NotNull Nametag nametagVisibility(@NotNull Visibility visibility) {
+        mutationVersion++; visibilityVersion++;
         data.nametagVisibility(TeamData.Visibility.valueOf(visibility.name()));
         return this;
     }
 
     @Override
     public synchronized @NotNull Nametag collision(@NotNull Collision collision) {
+        mutationVersion++;
         data.collision(TeamData.Collision.valueOf(collision.name()));
         return this;
     }
 
     @Override
-    public @NotNull Nametag perViewer(@Nullable NametagResolver resolver) {
+    public synchronized @NotNull Nametag perViewer(@Nullable NametagResolver resolver) {
+        mutationVersion++;
         this.viewerResolver = resolver;
         return this;
+    }
+
+    public AutoCloseable leaseVisibility(boolean created) {
+        synchronized (this) {
+            if (visibilityLeases++ == 0) {
+                restoreVisibility = data.nametagVisibility();
+                leaseVisibilityVersion = visibilityVersion;
+                leaseMutationVersion = mutationVersion;
+                leaseCreated = created;
+                data.nametagVisibility(TeamData.Visibility.NEVER);
+            }
+        }
+        Schedulers.global(plugin, this::apply);
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        return () -> {
+            if (!closed.compareAndSet(false, true)) return;
+            boolean remove = false, restore = false;
+            synchronized (NametagImpl.this) {
+                if (--visibilityLeases == 0 && !removed && visibilityVersion == leaseVisibilityVersion) {
+                    remove = leaseCreated && mutationVersion == leaseMutationVersion;
+                    if (!remove) { data.nametagVisibility(restoreVisibility); restore = true; }
+                    else remove();
+                }
+            }
+            if (restore) Schedulers.global(plugin, this::apply);
+        };
     }
 
     @Override
@@ -147,9 +186,11 @@ public final class NametagImpl implements Nametag {
             return;
         }
         removed = true;
-        for (Player viewer : onlinePlayers.get()) {
-            Schedulers.onEntity(cleanupPlugin, viewer, () -> adapter.removeTeam(viewer, teamName));
-        }
+        Schedulers.global(cleanupPlugin, () -> {
+            for (Player viewer : onlinePlayers.get()) {
+                Schedulers.onEntity(cleanupPlugin, viewer, () -> adapter.removeTeam(viewer, teamName));
+            }
+        });
         receivers.clear();
     }
 

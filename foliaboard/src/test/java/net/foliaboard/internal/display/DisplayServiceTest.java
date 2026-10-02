@@ -484,6 +484,142 @@ class DisplayServiceTest {
         assertEquals(1, frames(viewer).size());
     }
 
+    private net.foliaboard.api.display.NametagProfile profile(String text) {
+        return net.foliaboard.api.display.NametagProfile.builder().layout(
+                net.foliaboard.api.display.NametagLayout.builder().text("line", Component.text(text), 0.25).build()).build();
+    }
+
+    @Test
+    void compositionUpdatesWholeLayoutsAndPreservesElementKeys() {
+        var tag = displays.nametag(owner, profile("first"));
+        scheduler.advanceTicks(4);
+        var old=frames(viewer).getFirst();
+        tag.layout(net.foliaboard.api.display.NametagLayout.builder().text("line", Component.text("new"), 0.3)
+                .text("second", Component.text("second"), 0.6).item("icon", item(2), 1).build());
+        assertFalse(old.accepted().getAsBoolean());
+        scheduler.advanceTicks(2);
+        assertEquals(3, frames(viewer).size());
+        assertEquals(old.id(), frames(viewer).stream().filter(frame -> Component.text("new").equals(frame.text())).findFirst().orElseThrow().id());
+        assertEquals(3, tag.diagnose(viewer.getUniqueId()).elements());
+        assertEquals(0, frames(owner).size());
+    }
+
+    @Test
+    void compositionSamplerAndRendererUseIndependentRefreshPeriods() {
+        var samples=new java.util.concurrent.atomic.AtomicInteger();
+        var renders=new java.util.concurrent.atomic.AtomicInteger();
+        var selected=profile("empty").toBuilder().refresh(new net.foliaboard.api.display.NametagRefresh(5, 3)).build();
+        var tag=displays.nametag(owner, selected, entity -> { assertEquals(owner, entity); return samples.incrementAndGet(); },
+                (player, data, current) -> { assertEquals(viewer, player); renders.incrementAndGet(); return current.layout(); });
+        scheduler.advanceTicks(12);
+        assertEquals(3, samples.get());
+        assertTrue(renders.get() >= 3 && renders.get() <= 5);
+        assertEquals(3, tag.snapshot().orElseThrow());
+        tag.refreshData(); scheduler.advanceTicks(1);
+        assertEquals(4, samples.get());
+    }
+
+    @Test
+    void permanentOwnerLockOverridesProfilesLayersRefreshAndFixedPlacement() {
+        var ownVisible=profile("visible").toBuilder().visibility(DisplayVisibility.builder().selfVisible(true).build()).build();
+        var tag=displays.nametag(owner, ownVisible);
+        scheduler.advanceTicks(4); assertEquals(1, frames(owner).size());
+        var old=frames(owner).getFirst();
+        tag.lockOwnerHidden(); assertFalse(old.accepted().getAsBoolean());
+        tag.profile(ownVisible); tag.layer(ownVisible, 1, 0); tag.show(owner.getUniqueId()); tag.refresh();
+        scheduler.advanceTicks(4); assertTrue(frames(owner).isEmpty());
+        tag.location(new Location(world, 1, 64, 1)); scheduler.advanceTicks(2);
+        assertTrue(frames(owner).isEmpty()); assertEquals(1, frames(viewer).size());
+        assertTrue(tag.isOwnerHiddenLocked());
+    }
+
+    @Test
+    void layersUsePriorityNewestTieAndExpiryWithoutLosingBaseUpdates() {
+        var tag=displays.nametag(owner, profile("base"));
+        var low=tag.layer(profile("low"), 1, 0);
+        var high=tag.layer(profile("high"), 2, 5);
+        var tie=tag.layer(profile("tie"), 2, 0);
+        scheduler.advanceTicks(3); assertEquals(Component.text("tie"), frames(viewer).getFirst().text());
+        tag.profile(profile("changed")); tie.close(); scheduler.advanceTicks(1);
+        assertEquals(Component.text("high"), frames(viewer).getFirst().text());
+        scheduler.advanceTicks(2); assertTrue(high.isClosed()); assertEquals(Component.text("low"), frames(viewer).getFirst().text());
+        low.close(); scheduler.advanceTicks(2); assertEquals(Component.text("changed"), frames(viewer).getFirst().text());
+        low.close();
+    }
+
+    @Test
+    void persistentDefinitionsRebindFreshPlayerAndKeepExclusions() {
+        var tag=displays.nametag(owner, profile("persistent"), entity -> System.identityHashCode(entity),
+                (player, data, selected) -> selected.layout());
+        tag.persistent(true); tag.hide(viewer.getUniqueId());
+        scheduler.advanceTicks(4); displays.onQuit(owner);
+        assertFalse(tag.isClosed()); assertTrue(tag.snapshot().isEmpty());
+        Player fresh=player(owner.getUniqueId()); when(fresh.getTrackedBy()).thenReturn(Set.of(viewer));
+        displays.onJoin(fresh); displays.onQuit(owner); scheduler.advanceTicks(4);
+        assertEquals(System.identityHashCode(fresh), tag.snapshot().orElseThrow());
+        assertTrue(frames(viewer).isEmpty()); tag.show(viewer.getUniqueId()); scheduler.advanceTicks(2);
+        assertEquals(1, frames(viewer).size()); tag.close(); assertEquals(0, displays.stats().handles());
+    }
+
+    @Test
+    void compositionDistanceBandsFadeAndScaleAreOptional() {
+        var layout=net.foliaboard.api.display.NametagLayout.builder()
+                .element(new net.foliaboard.api.display.NametagLayout.Text("near", Component.text("near"), 0.25,
+                        DisplayStyle.defaults(), TextDisplayStyle.defaults(), 0, 10))
+                .element(new net.foliaboard.api.display.NametagLayout.Text("far", Component.text("far"), 0.25,
+                        DisplayStyle.defaults(), TextDisplayStyle.defaults(), 10, 40)).build();
+        var selected=profile("unused").toBuilder().layout(layout)
+                .distance(new net.foliaboard.api.display.NametagDistance(10, 30, 1, 0.5f)).build();
+        displays.nametag(owner, selected); scheduler.advanceTicks(4);
+        assertEquals(Component.text("near"), frames(viewer).getFirst().text());
+        when(viewer.getLocation()).thenReturn(new Location(world, 21, 64, 1)); scheduler.advanceTicks(2);
+        assertEquals(Component.text("far"), frames(viewer).getFirst().text());
+        assertEquals(128, frames(viewer).getFirst().textStyle().opacity());
+        assertEquals(0.75f, frames(viewer).getFirst().style().transform().scale().x(), 0.001);
+    }
+
+    @Test
+    void compositionFadesGlobalVisibilityButExclusionsRemoveImmediately() {
+        var selected=profile("fade").toBuilder().transition(new net.foliaboard.api.display.NametagTransition(4, 4)).build();
+        var tag=displays.nametag(owner, selected); scheduler.advanceTicks(6);
+        assertEquals(255, frames(viewer).getFirst().textStyle().opacity());
+        tag.visible(false); scheduler.advanceTicks(1);
+        assertTrue(frames(viewer).getFirst().textStyle().opacity() < 255);
+        tag.hide(viewer.getUniqueId()); scheduler.advanceTicks(1); assertTrue(frames(viewer).isEmpty());
+        assertEquals(net.foliaboard.api.display.NametagStatus.Reason.EXCLUDED, tag.diagnose(viewer.getUniqueId()).reason());
+        tag.show(viewer.getUniqueId()); scheduler.advanceTicks(5); assertTrue(frames(viewer).isEmpty());
+    }
+
+    @Test
+    void entityAttachmentsUseEntityTrackingAndRetirement() {
+        var mob=mock(org.bukkit.entity.LivingEntity.class);
+        when(mob.getUniqueId()).thenReturn(UUID.randomUUID()); when(mob.isValid()).thenReturn(true);
+        when(mob.getLocation()).thenReturn(new Location(world, 1, 64, 1)); when(mob.getEntityId()).thenReturn(20);
+        when(mob.getTrackedBy()).thenReturn(Set.of(viewer)); when(mob.getPassengers()).thenReturn(List.of());
+        when(viewer.canSee(mob)).thenReturn(true);
+        var tag=displays.nametag(mob, profile("mob"));
+        scheduler.advanceTicks(4); assertEquals(20, frames(viewer).getFirst().vehicle());
+        when(mob.isDead()).thenReturn(true); scheduler.advanceTicks(2);
+        assertTrue(tag.isClosed()); assertEquals(0, displays.stats().handles());
+    }
+
+    @Test
+    void profileRegistryEventsFailuresAndVanillaLeasesRemainOptional() {
+        var registry=displays.profiles(); var selected=profile("profile");
+        registry.register("custom", selected); assertEquals(Set.of("custom"), registry.names());
+        assertEquals(selected, registry.find("custom").orElseThrow()); registry.remove("custom"); assertTrue(registry.find("custom").isEmpty());
+        var events=new java.util.ArrayList<net.foliaboard.api.display.NametagEvent>();
+        var leases=new java.util.concurrent.atomic.AtomicInteger();
+        displays.vanillaLeases(player -> { leases.incrementAndGet(); return () -> leases.decrementAndGet(); });
+        var tag=displays.nametag(owner, selected); tag.listener(events::add);
+        assertEquals(0, leases.get()); tag.replaceVanillaName(true); assertEquals(1, leases.get());
+        scheduler.advanceTicks(4); assertTrue(events.stream().anyMatch(event -> event.type()==net.foliaboard.api.display.NametagEvent.Type.PRESENTED));
+        tag.renderer((player, data, current) -> { throw new IllegalStateException("renderer unavailable"); });
+        scheduler.advanceTicks(2); assertEquals(net.foliaboard.api.display.NametagStatus.Reason.FAILURE, tag.diagnose(viewer.getUniqueId()).reason());
+        tag.close(); assertEquals(0, leases.get());
+        assertTrue(events.stream().anyMatch(event -> event.type()==net.foliaboard.api.display.NametagEvent.Type.CLOSED));
+    }
+
     private static ItemStack item(int amount) {
         ItemStack item = mock(ItemStack.class);
         java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(amount);
@@ -513,7 +649,7 @@ class DisplayServiceTest {
         }
 
         @Override
-        public float mountCorrection(Player player) {
+        public float mountCorrection(org.bukkit.entity.Entity player) {
             return correction;
         }
     }

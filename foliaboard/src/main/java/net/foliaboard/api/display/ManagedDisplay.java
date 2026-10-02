@@ -2,6 +2,7 @@ package net.foliaboard.api.display;
 
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Entity;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.Set;
@@ -50,6 +51,9 @@ public interface ManagedDisplay extends AutoCloseable {
 
     /** Attaches as a client-only passenger above the player's current height, with an additional vertical gap. */
     void attach(Player player, double gap);
+
+    /** Attaches as a client passenger to a tracked entity, using its owning scheduler. */
+    void attach(Entity entity, double gap);
 
     /** Recreates accepted presentations. Hidden viewers remain hidden. */
     void refresh();

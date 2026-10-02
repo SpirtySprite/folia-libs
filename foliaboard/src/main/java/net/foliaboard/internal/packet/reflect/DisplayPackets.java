@@ -2,7 +2,7 @@ package net.foliaboard.internal.packet.reflect;
 
 import net.foliaboard.api.display.DisplayTransform;
 import net.foliaboard.internal.display.DisplayFrame;
-import org.bukkit.entity.Player;
+import org.bukkit.entity.Entity;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.ByteArrayOutputStream;
@@ -43,6 +43,9 @@ public final class DisplayPackets {
     private final Object zero;
     private final Object textType;
     private final Object itemType;
+    private final Map<UUID, Object> riders = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Constructor<?> rider;
+    private final Method level;
 
     public DisplayPackets() {
         Class<?> entity = Reflect.clazz("net.minecraft.world.entity.Entity");
@@ -88,7 +91,9 @@ public final class DisplayPackets {
                 : Reflect.constructor(packet("ClientboundTeleportEntityPacket"), int.class, change, Set.class, boolean.class);
         itemCopy = Reflect.method(Reflect.clazz("org.bukkit.craftbukkit.inventory.CraftItemStack"),
                 "asNMSCopy", ItemStack.class);
-        getPlayerHandle = Reflect.method(Reflect.clazz("org.bukkit.craftbukkit.entity.CraftPlayer"), "getHandle");
+        getPlayerHandle = Reflect.method(Reflect.clazz("org.bukkit.craftbukkit.entity.CraftEntity"), "getHandle");
+        rider = Reflect.constructor(Reflect.clazz("net.minecraft.world.entity.Display$TextDisplay"), types, Reflect.clazz("net.minecraft.world.level.Level"));
+        level = Reflect.methodByNameDeep(entity, "level", 0);
         ridingPosition = Reflect.method(entity, "getPassengerRidingPosition", entity);
         String[] shared = {"TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS", "TRANSFORMATION_INTERPOLATION_DURATION",
                 "POS_ROT_INTERPOLATION_DURATION", "TRANSLATION", "SCALE", "LEFT_ROTATION", "RIGHT_ROTATION",
@@ -117,12 +122,15 @@ public final class DisplayPackets {
         return counter.incrementAndGet();
     }
 
-    public float mountCorrection(Player player) {
+    public float mountCorrection(Entity player) {
         Object handle = Reflect.invoke(getPlayerHandle, player);
-        Object anchor = Reflect.invoke(ridingPosition, handle, new Object[]{null});
+        Object display = riders.computeIfAbsent(player.getUniqueId(), id -> Reflect.instantiate(rider, textType, Reflect.invoke(level, handle)));
+        Object anchor = Reflect.invoke(ridingPosition, handle, display);
         double mountY = Reflect.get(Reflect.field(anchor.getClass(), "y"), anchor);
         return (float) (player.getLocation().getY() + player.getHeight() - mountY);
     }
+
+    public void release(Entity entity) { riders.remove(entity.getUniqueId()); }
 
     public Object spawn(int id, UUID uuid, DisplayFrame frame) {
         Object type = frame.text() == null ? itemType : textType;

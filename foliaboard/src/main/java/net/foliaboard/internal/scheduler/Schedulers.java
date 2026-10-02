@@ -66,6 +66,10 @@ public final class Schedulers {
         scheduler(plugin).runAsyncLater(task, delay);
     }
 
+    public static TaskHandle globalLater(Plugin plugin, Runnable task, long ticks) {
+        return scheduler(plugin).scheduleGlobalLater(task, ticks);
+    }
+
     public static void global(@NotNull Plugin plugin, @NotNull Runnable task) {
         scheduler(plugin).runGlobal(task);
     }

@@ -4,6 +4,7 @@ import net.foliaboard.internal.metrics.PacketMetrics;
 import net.foliaboard.internal.packet.reflect.DisplayPackets;
 import net.foliaboard.internal.packet.reflect.Reflect;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Entity;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -76,9 +77,12 @@ public final class NmsDisplayTransport implements DisplayTransport {
     }
 
     @Override
-    public float mountCorrection(Player player) {
+    public float mountCorrection(Entity player) {
         return packets.mountCorrection(player);
     }
+
+    @Override
+    public void release(Entity entity) { packets.release(entity); }
 
     @Override
     public Connection connect(Player viewer) {
@@ -104,6 +108,7 @@ public final class NmsDisplayTransport implements DisplayTransport {
         private final Set<Object> ownMounts = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
         private volatile int count;
         private boolean installed;
+        private List<Object> staging;
 
         private Client(Object connection, Object channel) {
             this.connection = connection;
@@ -173,6 +178,45 @@ public final class NmsDisplayTransport implements DisplayTransport {
         }
 
         private void apply(List<DisplayFrame> snapshot) {
+            if (snapshot.stream().anyMatch(frame -> !frame.accepted().getAsBoolean())) return;
+            Map<UUID, Rendered> before = new HashMap<>(rendered);
+            Map<Integer, int[]> passengersBefore = new HashMap<>(nativePassengers);
+            Set<Integer> missingBefore = new HashSet<>(missingVehicles);
+            List<Object> mountsBefore = List.copyOf(ownMounts);
+            List<Object> transaction = new ArrayList<>();
+            staging = transaction;
+            boolean committed = false;
+            try {
+                applySnapshot(snapshot);
+                if (snapshot.stream().anyMatch(frame -> !frame.accepted().getAsBoolean())) return;
+                committed = true;
+            } finally {
+                staging = null;
+                if (!committed) {
+                    rendered.clear(); rendered.putAll(before);
+                    nativePassengers.clear(); nativePassengers.putAll(passengersBefore);
+                    missingVehicles.clear(); missingVehicles.addAll(missingBefore);
+                    ownMounts.clear(); ownMounts.addAll(mountsBefore);
+                    count = rendered.size();
+                }
+            }
+            if (!transaction.isEmpty()) {
+                try {
+                    write(Reflect.instantiate(bundle, transaction));
+                } catch (RuntimeException failure) {
+                    int[] uncertain = java.util.stream.Stream.concat(before.values().stream(), rendered.values().stream())
+                            .mapToInt(Rendered::entity).distinct().toArray();
+                    try {
+                        write(packets.remove(uncertain));
+                    } catch (RuntimeException cleanupFailure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                    throw failure;
+                }
+            }
+        }
+
+        private void applySnapshot(List<DisplayFrame> snapshot) {
             Set<Integer> relevantVehicles = new HashSet<>();
             for (DisplayFrame frame : snapshot) {
                 if (frame.vehicle() >= 0) relevantVehicles.add(frame.vehicle());
@@ -184,7 +228,8 @@ public final class NmsDisplayTransport implements DisplayTransport {
                 accepted.add(frame.id());
                 Rendered previous = rendered.get(frame.id());
                 if (previous != null && (previous.frame().generation() != frame.generation()
-                        || !previous.frame().world().equals(frame.world()) || previous.frame().vehicle() != frame.vehicle())) {
+                        || !previous.frame().world().equals(frame.world()) || previous.frame().vehicle() != frame.vehicle()
+                        || (previous.frame().text() == null) != (frame.text() == null))) {
                     erase(frame.id());
                     previous = null;
                 }
@@ -299,6 +344,7 @@ public final class NmsDisplayTransport implements DisplayTransport {
         }
 
         private void write(Object packet) {
+            if (staging != null) { staging.add(packet); return; }
             if (!packetClass.isInstance(packet)) throw new IllegalArgumentException("Not a server packet");
             Reflect.invoke(send, connection, packet);
             metrics.sent();

@@ -3,6 +3,7 @@ package io.github.spirtysprite.integration;
 import net.foliaboard.FoliaBoard;
 import net.foliaboard.api.display.DisplayVisibility;
 import net.foliaboard.api.display.ManagedNametag;
+import net.foliaboard.api.display.ManagedTextDisplay;
 import net.foliaboard.api.display.NametagLayout;
 import net.foliaboard.api.display.NametagProfile;
 import net.foliaboard.api.display.NametagRefresh;
@@ -23,6 +24,8 @@ final class NametagCompositionScenario {
     private ManagedNametag<Double> tag;
     private ManagedNametag<Boolean> mobTag;
     private ArmorStand mob;
+    private ArmorStand nativePassenger;
+    private ManagedTextDisplay warmup;
     private NametagProfile profile;
 
     private NametagCompositionScenario(FoliaBoard board, Player player, Scheduler scheduler) {
@@ -36,19 +39,40 @@ final class NametagCompositionScenario {
 
     private CompletableFuture<String> run() {
         return entity(() -> {
+            warmup = board.displays().text(player.getLocation(), Component.text("BoardCompositionWarmup"));
+            nativePassenger = player.getWorld().spawn(player.getLocation(), ArmorStand.class);
+            nativePassenger.setGravity(false);
+            nativePassenger.setVisible(false);
+            return null;
+        }).thenCompose(v -> delay(4)).thenCompose(v -> entity(() -> {
             profile=NametagProfile.builder().layout(NametagLayout.builder()
                     .text("first", Component.text("BoardCompositionFirst"), 0.25)
                     .text("second", Component.text("BoardCompositionSecond"), 0.55)
                     .item("icon", new ItemStack(Material.EMERALD), 0.9).build())
                     .visibility(DisplayVisibility.builder().selfVisible(true).build())
-                    .refresh(new NametagRefresh(2, 3)).transition(new NametagTransition(3, 3)).build();
+                    .refresh(new NametagRefresh(2, 200)).transition(new NametagTransition(3, 3)).build();
             board.displays().profiles().register("integration", profile);
-            tag=board.displays().nametag(player, profile, owner -> owner.getHeight(), (viewer, snapshot, selected) -> selected.layout());
+            tag=board.displays().nametag(player, profile, owner -> {
+                if (!player.getPassengers().contains(nativePassenger)) {
+                    require(player.addPassenger(nativePassenger), "late native passenger did not attach");
+                    sendNativePassengers();
+                }
+                return owner.getHeight();
+            }, (viewer, snapshot, selected) -> selected.layout());
             tag.replaceVanillaName(true);
+            warmup.close();
             return null;
-        }).thenCompose(v -> delay(10)).thenCompose(v -> entity(() -> {
+        })).thenCompose(v -> delay(10)).thenCompose(v -> entity(() -> {
             require(tag.snapshot().orElseThrow() > 0, "owner snapshot missing");
             require(tag.diagnose(player.getUniqueId()).elements() == 3, "composition did not render all elements");
+            player.setInvisible(true);
+            return null;
+        })).thenCompose(v -> delay(3)).thenCompose(v -> entity(() -> {
+            require(tag.diagnose(player.getUniqueId()).elements() == 0, "invisibility did not suppress composition");
+            player.setInvisible(false);
+            return null;
+        })).thenCompose(v -> delay(4)).thenCompose(v -> entity(() -> {
+            require(tag.diagnose(player.getUniqueId()).elements() == 3, "composition waited for refresh after suppression");
             var layer=tag.layer(profile.toBuilder().layout(NametagLayout.builder()
                     .text("first", Component.text("BoardCompositionLayer"), 0.25).build()).build(), 4, 5);
             require(!layer.isClosed(), "temporary layer closed early");
@@ -85,13 +109,33 @@ final class NametagCompositionScenario {
     }
 
     private void cleanup() {
+        scheduler.runForEntity(player, () -> player.setInvisible(false), null);
         if (tag != null) tag.close();
         if (mobTag != null) mobTag.close();
+        if (warmup != null) warmup.close();
         if (mob != null) { ArmorStand entity=mob; scheduler.runForEntity(entity, entity::remove, null); mob=null; }
+        if (nativePassenger != null) {
+            ArmorStand entity = nativePassenger;
+            scheduler.runForEntity(entity, entity::remove, null);
+            nativePassenger = null;
+        }
         board.displays().profiles().remove("integration");
     }
 
     private <T> CompletableFuture<T> entity(Supplier<T> call) { return scheduler.callForEntity(player, call); }
+    private void sendNativePassengers() {
+        try {
+            Object handle = player.getClass().getMethod("getHandle").invoke(player);
+            Class<?> entity = Class.forName("net.minecraft.world.entity.Entity");
+            Object packet = Class.forName("net.minecraft.network.protocol.game.ClientboundSetPassengersPacket")
+                    .getConstructor(entity).newInstance(handle);
+            Object connection = handle.getClass().getField("connection").get(handle);
+            connection.getClass().getMethod("send", Class.forName("net.minecraft.network.protocol.Packet"))
+                    .invoke(connection, packet);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Could not send native passenger regression packet", failure);
+        }
+    }
     private CompletableFuture<Void> delay(long ticks) {
         var result=new CompletableFuture<Void>();
         if (!scheduler.runForEntityLater(player, () -> result.complete(null),

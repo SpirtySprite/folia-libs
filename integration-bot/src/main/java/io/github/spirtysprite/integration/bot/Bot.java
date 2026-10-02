@@ -100,6 +100,9 @@ public final class Bot {
     private boolean boardFixedMoved;
     private boolean boardPassengerMounted;
     private boolean boardNativePassengerPreserved;
+    private final java.util.Set<Integer> compositionDisplays = new java.util.HashSet<>();
+    private boolean compositionMounted;
+    private boolean compositionFirstNativePreserved;
     private boolean boardSelfHidden = true;
     private int boardPassengerSpawns;
     private String loginName;
@@ -175,6 +178,7 @@ public final class Bot {
                     String text = plain(component);
                     UUID ownUuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + loginName).getBytes(StandardCharsets.UTF_8));
                     if (text.equals("BoardNeverSelf") || text.equals("BoardOtherOwner:" + ownUuid)) boardSelfHidden = false;
+                    if (text.equals("BoardCompositionFirst")) compositionDisplays.add(id);
                     if (text.equals("BoardFixedText") || text.equals("BoardPassengerVisible") || text.equals("BoardPeerPassenger")
                             || text.startsWith("BoardComposition") || text.startsWith("BoardOtherOwner:")) {
                         boolean fresh = boardDisplays.add(id);
@@ -198,6 +202,10 @@ public final class Bot {
             if (boardFixedEntity != null && id == boardFixedEntity) boardFixedMoved = true;
         } else if (packet.getClass().getSimpleName().equals("ClientboundSetPassengersPacket")) {
             int[] ids = (int[]) property(packet, "getPassengerIds");
+            if (!compositionMounted && java.util.Arrays.stream(ids).anyMatch(compositionDisplays::contains)) {
+                compositionMounted = true;
+                compositionFirstNativePreserved = java.util.Arrays.stream(ids).anyMatch(nativePassengers::contains);
+            }
             boolean virtual = java.util.Arrays.stream(ids).anyMatch(id -> boardDisplays.contains(id) || boardItems.contains(id));
             if (virtual) boardPassengerMounted = true;
             if (virtual && java.util.Arrays.stream(ids).anyMatch(nativePassengers::contains)) boardNativePassengerPreserved = true;
@@ -379,6 +387,7 @@ public final class Bot {
         result.put("boardItems", boardItems.size());
         result.put("boardPassengerMounted", boardPassengerMounted);
         result.put("boardNativePassengerPreserved", boardNativePassengerPreserved);
+        result.put("compositionFirstNativePreserved", compositionFirstNativePreserved);
         result.put("boardSelfHidden", boardSelfHidden);
         result.put("boardPassengerSpawns", boardPassengerSpawns);
         result.put("boardActiveDisplays", activeBoardDisplays.size());

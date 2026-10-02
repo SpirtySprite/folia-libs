@@ -163,8 +163,10 @@ Optional<OwnerData> captured = dynamic.snapshot();
 ```
 
 `NametagRefresh` independently controls sampling and layout evaluation intervals in ticks.
-Visibility and owner attachment checks continue every tick. `refreshData()` requests fresh
-sampling and viewer layouts; inherited `refresh()` recreates presentations. Sampler failure
+Visibility and owner attachment checks continue every tick. Brief tracking, range or invisibility
+suppression invalidates the cached layout so an eligible viewer recovers on the next evaluation
+without waiting for its layout refresh deadline. `refreshData()` requests fresh sampling and
+viewer layouts; inherited `refresh()` recreates presentations. Sampler failure
 clears stale data, renderer failure suppresses the affected viewer, and both increment provider
 failure counters. Setting a base layout preserves a custom renderer; the renderer decides how
 to use the selected profile.

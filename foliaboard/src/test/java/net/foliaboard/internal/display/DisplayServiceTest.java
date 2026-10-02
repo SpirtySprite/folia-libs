@@ -579,6 +579,35 @@ class DisplayServiceTest {
     }
 
     @Test
+    void briefSuppressionRebuildsLayoutBeforeLongViewerRefreshDeadline() {
+        var renders = new java.util.concurrent.atomic.AtomicInteger();
+        var selected = profile("visible").toBuilder()
+                .refresh(new net.foliaboard.api.display.NametagRefresh(1, 1000)).build();
+        displays.nametag(owner, selected, entity -> Boolean.TRUE, (player, data, active) -> {
+            renders.incrementAndGet();
+            return active.layout();
+        });
+        scheduler.advanceTicks(4);
+        assertEquals(1, renders.get());
+        for (String suppression : List.of("tracking", "range", "invisibility")) {
+            switch (suppression) {
+                case "tracking" -> when(owner.getTrackedBy()).thenReturn(Set.of());
+                case "range" -> when(viewer.getLocation()).thenReturn(new Location(world, 100, 64, 1));
+                case "invisibility" -> when(owner.isInvisible()).thenReturn(true);
+            }
+            scheduler.advanceTicks(2);
+            assertTrue(frames(viewer).isEmpty(), suppression);
+            int before = renders.get();
+            when(owner.getTrackedBy()).thenReturn(Set.of(viewer));
+            when(viewer.getLocation()).thenReturn(new Location(world, 1, 64, 1));
+            when(owner.isInvisible()).thenReturn(false);
+            scheduler.advanceTicks(2);
+            assertEquals(1, frames(viewer).size(), suppression);
+            assertEquals(before + 1, renders.get(), suppression);
+        }
+    }
+
+    @Test
     void compositionFadesGlobalVisibilityButExclusionsRemoveImmediately() {
         var selected=profile("fade").toBuilder().transition(new net.foliaboard.api.display.NametagTransition(4, 4)).build();
         var tag=displays.nametag(owner, selected); scheduler.advanceTicks(6);

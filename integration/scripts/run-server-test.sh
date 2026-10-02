@@ -213,6 +213,7 @@ need(seen["boardFixedText"] and seen["boardItems"] > 0, "received managed text a
 need(seen["boardFixedMoved"], "fixed display moved without recreation")
 need(seen["boardPassengerMounted"], "received client passenger attachments")
 need(seen["boardNativePassengerPreserved"], "client passenger attachments preserved a native passenger")
+need(seen["compositionFirstNativePreserved"], "first composition mount preserved a newer native passenger packet")
 need(seen["boardSelfHidden"], "never received owner-hidden display text")
 need(seen["boardPassengerSpawns"] >= 4, "passenger display was recreated after teleports")
 need(seen["boardActiveDisplays"] == 0, "managed client displays were removed")

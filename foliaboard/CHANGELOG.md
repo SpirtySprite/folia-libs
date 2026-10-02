@@ -21,6 +21,8 @@ All notable changes to FoliaBoard are documented here. The format follows
 - Bounded placeholder caches, explicit pruning, failure counters and scheduled component rendering.
 
 ### Fixed
+- Rebuild composed nametag layouts immediately after brief visibility suppression, regardless of
+  viewer refresh intervals, and preserve native passenger packets received before the first mount.
 - Persist only accepted layout event results and skip persistence for cancelled applications.
 - Include managed tab and boss-bar rendering and cleanup in shared presentation metrics.
 - Clear discarded automatic refresh callbacks and release player generations on disconnect.

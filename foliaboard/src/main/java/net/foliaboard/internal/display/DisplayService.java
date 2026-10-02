@@ -783,6 +783,7 @@ public final class DisplayService implements Displays {
             boolean fadeOut = reason == NametagStatus.Reason.GLOBAL_HIDDEN || reason == NametagStatus.Reason.FILTER;
             if (!eligible && !fadeOut) {
                 view.alpha = 0; view.layout = NametagLayout.empty();
+                view.revision = -1;
                 status(view, viewerId, reason, 0); return List.of();
             }
             if (eligible && (view.revision != revision || view.tick >= view.nextRender)) {
@@ -793,6 +794,7 @@ public final class DisplayService implements Displays {
                     view.nextRender = view.tick + profile.refresh().viewerTicks();
                 } catch (RuntimeException failure) {
                     providerFailures.increment(); view.layout = NametagLayout.empty(); view.alpha = 0;
+                    view.revision = -1;
                     status(view, viewerId, NametagStatus.Reason.FAILURE, 0);
                     emit(NametagEvent.Type.FAILURE, viewerId, view.status); return List.of();
                 }

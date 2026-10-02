@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   benchmark:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-libs
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7

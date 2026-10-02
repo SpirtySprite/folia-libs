@@ -9,7 +9,8 @@ All notable changes to FoliaBoard are documented here. The format follows
 ### Added
 - Experimental managed TextDisplay and ItemDisplay APIs, with client-only passenger attachments,
   persistent owner hiding and viewer exclusions, teleport/session invalidation, rendering styles,
-  viewer-specific content and shared presentation metrics.
+  viewer-specific content/styles, fluent style builders, settings snapshots, interpolated fixed
+  movement, bounded transport recovery and shared presentation metrics.
 - Experimental atomic sidebar frames, independent row refresh, reusable sections, temporary layout
   scopes, rotating pages, animation timelines and per-surface counters.
 - Optional enabled lifecycle hosts for cleanup after owner disable.

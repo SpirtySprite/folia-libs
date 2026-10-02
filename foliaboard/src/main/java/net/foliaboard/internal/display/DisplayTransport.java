@@ -17,5 +17,9 @@ public interface DisplayTransport {
         void close();
 
         int entities();
+
+        default boolean isClosed() {
+            return false;
+        }
     }
 }

@@ -59,6 +59,10 @@ final class DisplayScenario {
             return null;
         })).thenCompose(v -> delay(5)).thenCompose(v -> entity(() -> {
             require(board.displays().stats().clientEntities() == 2, "refresh or show overrode self hiding");
+            fixedText.style(fixedText.style().toBuilder().teleportTicks(5).interpolationTicks(5).build());
+            fixedText.location(origin.clone().add(3, 2, 0));
+            nametag.styleFor(viewer -> net.foliaboard.api.display.DisplayStyle.builder().glowing(true).build());
+            nametag.textStyleFor(viewer -> net.foliaboard.api.display.TextDisplayStyle.builder().background(0x80000000).build());
             passenger = (ArmorStand) player.getWorld().spawnEntity(player.getLocation(), EntityType.ARMOR_STAND);
             passenger.setGravity(false);
             passenger.setVisible(false);

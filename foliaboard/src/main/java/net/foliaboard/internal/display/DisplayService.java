@@ -112,6 +112,8 @@ public final class DisplayService implements Displays {
     private void register(Handle handle) {
         runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.DISPLAY);
         handles.put(handle.id, handle);
+        if (handle.owner != null) onJoin(handle.owner);
+        if (handle.closed) return;
         if (!started) {
             started = true;
             Schedulers.global(runtime.plugin(), () -> {
@@ -129,6 +131,7 @@ public final class DisplayService implements Displays {
         Session current = sessions.get(id);
         if (current != null && current.player == player) return;
         if (current != null) retire(current);
+        if (handles.isEmpty()) return;
         Session session = new Session(player);
         sessions.put(id, session);
         session.timer = Schedulers.entityTaskTimer(runtime.plugin(), player, timer -> {
@@ -137,7 +140,12 @@ public final class DisplayService implements Displays {
             } catch (RuntimeException failure) {
                 transportFailure(failure);
             }
+        }, () -> {
+            synchronized (DisplayService.this) {
+                if (!session.ended) retire(session);
+            }
         }, 1, 1);
+        if (session.timer.isCancelled() && !session.ended) retire(session);
     }
 
     public synchronized void onTransition(Player player) {
@@ -145,6 +153,7 @@ public final class DisplayService implements Displays {
         if (session == null || session.player != player) return;
         session.epoch++;
         session.anchor = null;
+        session.position = null;
         session.settleTicks = 2;
         for (Handle handle : handles.values()) {
             if (handle.owner == player) handle.generation++;
@@ -154,8 +163,10 @@ public final class DisplayService implements Displays {
 
     public synchronized void onQuit(Player player) {
         Session session = sessions.get(player.getUniqueId());
-        if (session == null || session.player != player) return;
-        retire(session);
+        if (session != null && session.player == player) retire(session);
+        for (Handle handle : List.copyOf(handles.values())) {
+            if (handle.owner == player) handle.close();
+        }
     }
 
     private void retire(Session session) {
@@ -186,6 +197,7 @@ public final class DisplayService implements Displays {
         }
         Location position = viewer.getLocation();
         UUID world = position.getWorld().getUID();
+        session.position = fixed(position);
         boolean alive = viewer.isValid() && !viewer.isDead();
         if (alive) {
             Set<UUID> tracked = new HashSet<>();
@@ -197,7 +209,20 @@ public final class DisplayService implements Displays {
         } else {
             session.anchor = null;
         }
-        if (session.connection == null && !handles.isEmpty()) session.connection = transport.connect(viewer);
+        if (session.connection != null && session.connection.isClosed()) {
+            session.connection.close();
+            session.connection = null;
+            session.retryTicks = 20;
+        }
+        if (session.retryTicks > 0) session.retryTicks--;
+        if (session.connection == null && session.retryTicks == 0 && !handles.isEmpty()) {
+            try {
+                session.connection = transport.connect(viewer);
+            } catch (RuntimeException failure) {
+                session.retryTicks = 20;
+                transportFailure(failure);
+            }
+        }
         if (session.connection == null) return;
         List<DisplayFrame> frames = new ArrayList<>();
         for (Handle handle : List.copyOf(handles.values())) {
@@ -209,22 +234,28 @@ public final class DisplayService implements Displays {
             }
             if (anchor == null || !allowed(handle, session, anchor, position)) continue;
             long generation = handle.generation;
+            long revision = handle.revision;
             long viewerEpoch = session.epoch;
             long ownerEpoch = ownerSession == null ? 0 : ownerSession.epoch;
             try {
                 if (!handle.predicate.test(viewer)) continue;
                 Component text = handle instanceof TextHandle textHandle ? textHandle.resolve(viewer) : null;
                 ItemStack item = handle instanceof ItemHandle itemHandle ? itemHandle.resolve(viewer) : null;
-                if (!current(handle, session, ownerSession, generation, viewerEpoch, ownerEpoch)) continue;
+                DisplayStyle renderStyle = Objects.requireNonNull(handle.styleProvider == null ? handle.style
+                        : handle.styleProvider.apply(viewer), "provider.style");
+                TextDisplayStyle renderText = handle instanceof TextHandle textHandle ? textHandle.resolveStyle(viewer)
+                        : TextDisplayStyle.defaults();
+                if (!accepted(handle, session, ownerSession, anchor, revision, viewerEpoch, ownerEpoch)) continue;
                 Anchor captured = anchor;
                 Session capturedOwner = ownerSession;
                 frames.add(new DisplayFrame(handle.id, generation, anchor.world, anchor.x,
                         anchor.y, anchor.z, anchor.yaw, anchor.pitch, anchor.vehicle,
                         anchor.correction + (float) handle.gap, text, item,
                         handle instanceof ItemHandle itemHandle ? itemHandle.transform : ItemDisplay.ItemDisplayTransform.NONE,
-                        handle.style, handle instanceof TextHandle textHandle ? textHandle.textStyle : TextDisplayStyle.defaults(),
-                        handle.visibility.range(), () -> accepted(handle, session, capturedOwner, captured,
-                                generation, viewerEpoch, ownerEpoch), anchor.passengers));
+                        renderStyle, renderText,
+                        handle.visibility.range(), () -> eligible(handle, session) && accepted(handle, session, capturedOwner, captured,
+                                revision, viewerEpoch, ownerEpoch),
+                        () -> retained(handle, session, capturedOwner, captured, generation, viewerEpoch, ownerEpoch), anchor.passengers));
                 handle.eligible.add(viewer.getUniqueId());
             } catch (RuntimeException failure) {
                 providerFailures.increment();
@@ -252,18 +283,39 @@ public final class DisplayService implements Displays {
         return dx * dx + dy * dy + dz * dz <= policy.range() * policy.range();
     }
 
+    private synchronized boolean retained(Handle handle, Session viewer, Session owner, Anchor anchor,
+                                          long generation, long viewerEpoch, long ownerEpoch) {
+        return handle.generation == generation && eligible(handle, viewer)
+                && accepted(handle, viewer, owner, anchor, handle.revision, viewerEpoch, ownerEpoch);
+    }
+
+    private synchronized boolean eligible(Handle handle, Session session) {
+        return handle.eligible.contains(session.player.getUniqueId());
+    }
+
     private synchronized boolean accepted(Handle handle, Session viewer, Session owner, Anchor anchor,
                                           long generation, long viewerEpoch, long ownerEpoch) {
-        return current(handle, viewer, owner, generation, viewerEpoch, ownerEpoch)
-                && !handle.hidden.contains(viewer.player.getUniqueId()) && handle.visible
-                && (handle.owner == null || handle.visibility.selfVisible()
-                || !handle.owner.getUniqueId().equals(viewer.player.getUniqueId()))
-                && (handle.owner == null || System.nanoTime() - anchor.sampled <= 1_000_000_000L);
+        if (!current(handle, viewer, owner, generation, viewerEpoch, ownerEpoch)
+                || handle.hidden.contains(viewer.player.getUniqueId()) || !handle.visible || viewer.position == null) return false;
+        Anchor latest = owner == null ? anchor : owner.anchor;
+        if (latest == null || !latest.world.equals(viewer.position.world)) return false;
+        if (owner != null) {
+            DisplayVisibility policy = handle.visibility;
+            boolean self = owner.player.getUniqueId().equals(viewer.player.getUniqueId());
+            if (self && !policy.selfVisible() || !self && !latest.tracked.contains(viewer.player.getUniqueId())
+                    || policy.hideInvisible() && latest.invisible || policy.hideSneaking() && latest.sneaking
+                    || policy.hideSpectators() && latest.spectator
+                    || System.nanoTime() - latest.sampled > 1_000_000_000L) return false;
+        }
+        double dx = latest.x - viewer.position.x;
+        double dy = latest.y - viewer.position.y;
+        double dz = latest.z - viewer.position.z;
+        return dx * dx + dy * dy + dz * dz <= handle.visibility.range() * handle.visibility.range();
     }
 
     private boolean current(Handle handle, Session viewer, Session owner, long generation, long viewerEpoch, long ownerEpoch) {
         return !closed && !runtime.closed() && !handle.closed && handles.get(handle.id) == handle
-                && handle.generation == generation && !viewer.ended && viewer.epoch == viewerEpoch
+                && handle.revision == generation && !viewer.ended && viewer.epoch == viewerEpoch
                 && sessions.get(viewer.player.getUniqueId()) == viewer
                 && (owner == null || !owner.ended && owner.epoch == ownerEpoch
                 && sessions.get(owner.player.getUniqueId()) == owner);
@@ -313,6 +365,8 @@ public final class DisplayService implements Displays {
         private TaskHandle timer = TaskHandle.NOOP;
         private DisplayTransport.Connection connection;
         private Anchor anchor;
+        private Anchor position;
+        private int retryTicks;
         private long epoch;
         private int settleTicks;
         private boolean ended;
@@ -327,12 +381,14 @@ public final class DisplayService implements Displays {
         private final Set<UUID> hidden = new HashSet<>();
         private final Set<UUID> eligible = new HashSet<>();
         private DisplayStyle style = DisplayStyle.defaults();
+        private Function<Player, DisplayStyle> styleProvider;
         private DisplayVisibility visibility = DisplayVisibility.defaults();
         private Predicate<Player> predicate = player -> true;
         private Player owner;
         private double gap;
         private Anchor fixed;
         private long generation;
+        private long revision;
         private boolean visible = true;
         private boolean closed;
 
@@ -346,13 +402,43 @@ public final class DisplayService implements Displays {
                 ensureOpen();
                 if (closed) throw new IllegalStateException("Display is closed");
                 change.run();
+                revision++;
                 runtime.metrics().requested(net.foliaboard.api.PresentationStats.Surface.DISPLAY);
             }
         }
 
         @Override
+        public DisplayStyle style() {
+            synchronized (DisplayService.this) {
+                return style;
+            }
+        }
+
+        @Override
+        public DisplayVisibility visibility() {
+            synchronized (DisplayService.this) {
+                return visibility;
+            }
+        }
+
+        @Override
+        public boolean isVisible() {
+            synchronized (DisplayService.this) {
+                return visible;
+            }
+        }
+
+        @Override
         public void style(DisplayStyle value) {
-            mutate(() -> style = Objects.requireNonNull(value, "style"));
+            mutate(() -> {
+                style = Objects.requireNonNull(value, "style");
+                styleProvider = null;
+            });
+        }
+
+        @Override
+        public void styleFor(Function<Player, DisplayStyle> value) {
+            mutate(() -> styleProvider = Objects.requireNonNull(value, "provider"));
         }
 
         @Override
@@ -390,9 +476,9 @@ public final class DisplayService implements Displays {
         public void location(Location value) {
             Anchor copy = fixed(value);
             mutate(() -> {
+                if (owner != null || fixed == null || !fixed.world.equals(copy.world)) generation++;
                 fixed = copy;
                 owner = null;
-                generation++;
             });
         }
 
@@ -443,6 +529,7 @@ public final class DisplayService implements Displays {
         private Component text;
         private Function<Player, Component> provider;
         private TextDisplayStyle textStyle = TextDisplayStyle.defaults();
+        private Function<Player, TextDisplayStyle> styleProvider;
 
         private TextHandle(Component text) {
             this.text = text;
@@ -450,6 +537,10 @@ public final class DisplayService implements Displays {
 
         private Component resolve(Player viewer) {
             return Objects.requireNonNull(provider == null ? text : provider.apply(viewer), "provider.text");
+        }
+
+        private TextDisplayStyle resolveStyle(Player viewer) {
+            return Objects.requireNonNull(styleProvider == null ? textStyle : styleProvider.apply(viewer), "provider.textStyle");
         }
 
         @Override
@@ -466,8 +557,23 @@ public final class DisplayService implements Displays {
         }
 
         @Override
+        public TextDisplayStyle textStyle() {
+            synchronized (DisplayService.this) {
+                return textStyle;
+            }
+        }
+
+        @Override
         public void textStyle(TextDisplayStyle value) {
-            super.mutate(() -> textStyle = Objects.requireNonNull(value, "style"));
+            super.mutate(() -> {
+                textStyle = Objects.requireNonNull(value, "style");
+                styleProvider = null;
+            });
+        }
+
+        @Override
+        public void textStyleFor(Function<Player, TextDisplayStyle> value) {
+            super.mutate(() -> styleProvider = Objects.requireNonNull(value, "provider"));
         }
     }
 
@@ -496,6 +602,13 @@ public final class DisplayService implements Displays {
         @Override
         public void itemFor(Function<Player, ItemStack> value) {
             super.mutate(() -> provider = Objects.requireNonNull(value, "provider"));
+        }
+
+        @Override
+        public ItemDisplay.ItemDisplayTransform itemTransform() {
+            synchronized (DisplayService.this) {
+                return transform;
+            }
         }
 
         @Override

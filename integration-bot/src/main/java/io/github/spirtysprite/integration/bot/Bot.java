@@ -96,6 +96,8 @@ public final class Bot {
     private final java.util.Set<Integer> nativePassengers = new java.util.HashSet<>();
     private final java.util.Set<Integer> activeBoardDisplays = new java.util.HashSet<>();
     private boolean boardFixedText;
+    private Integer boardFixedEntity;
+    private boolean boardFixedMoved;
     private boolean boardPassengerMounted;
     private boolean boardNativePassengerPreserved;
     private boolean boardSelfHidden = true;
@@ -177,12 +179,23 @@ public final class Bot {
                             || text.startsWith("BoardOtherOwner:")) {
                         boolean fresh = boardDisplays.add(id);
                         activeBoardDisplays.add(id);
-                        if (text.equals("BoardFixedText")) boardFixedText = true;
+                        if (text.equals("BoardFixedText")) {
+                            boardFixedText = true;
+                            boardFixedEntity = id;
+                        }
                         if (fresh && text.equals("BoardPassengerVisible")) boardPassengerSpawns++;
                         if (fresh && text.startsWith("BoardOtherOwner:")) boardOtherOwnerSpawns++;
                     }
                 }
             }
+        } else if (packet.getClass().getSimpleName().equals("ClientboundTeleportEntityPacket")) {
+            int id;
+            try {
+                id = ((Number) property(packet, "getId")).intValue();
+            } catch (IllegalStateException olderProtocol) {
+                id = ((Number) property(packet, "getEntityId")).intValue();
+            }
+            if (boardFixedEntity != null && id == boardFixedEntity) boardFixedMoved = true;
         } else if (packet.getClass().getSimpleName().equals("ClientboundSetPassengersPacket")) {
             int[] ids = (int[]) property(packet, "getPassengerIds");
             boolean virtual = java.util.Arrays.stream(ids).anyMatch(id -> boardDisplays.contains(id) || boardItems.contains(id));
@@ -362,6 +375,7 @@ public final class Bot {
         result.put("npcEquipmentSeen", npcEquipmentSeen);
         result.put("npcEquipmentCleared", npcEquipmentCleared);
         result.put("boardFixedText", boardFixedText);
+        result.put("boardFixedMoved", boardFixedMoved);
         result.put("boardItems", boardItems.size());
         result.put("boardPassengerMounted", boardPassengerMounted);
         result.put("boardNativePassengerPreserved", boardNativePassengerPreserved);

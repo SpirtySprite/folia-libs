@@ -38,4 +38,123 @@ public record DisplayStyle(Display.Billboard billboard, DisplayTransform transfo
         return new DisplayStyle(billboard, value, blockLight, skyLight, interpolationTicks, teleportTicks,
                 shadowRadius, shadowStrength, width, height, glowing, glowColor);
     }
+    /** Returns a builder initialized with default settings. Builders are confined to the calling thread. */
+    public static Builder builder() {
+        return defaults().toBuilder();
+    }
+
+    /** Returns an independent builder initialized with these settings. */
+    public Builder toBuilder() {
+        return new Builder(this);
+    }
+
+    /** Fluent configuration builder. Build immutable settings before sharing them between threads. */
+    @ApiStatus.Experimental
+    public static final class Builder {
+        private Display.Billboard billboard;
+        private DisplayTransform transform;
+        private int blockLight;
+        private int skyLight;
+        private int interpolationTicks;
+        private int teleportTicks;
+        private float shadowRadius;
+        private float shadowStrength;
+        private float width;
+        private float height;
+        private boolean glowing;
+        private int glowColor;
+
+        private Builder(DisplayStyle initial) {
+            billboard = initial.billboard();
+            transform = initial.transform();
+            blockLight = initial.blockLight();
+            skyLight = initial.skyLight();
+            interpolationTicks = initial.interpolationTicks();
+            teleportTicks = initial.teleportTicks();
+            shadowRadius = initial.shadowRadius();
+            shadowStrength = initial.shadowStrength();
+            width = initial.width();
+            height = initial.height();
+            glowing = initial.glowing();
+            glowColor = initial.glowColor();
+        }
+
+        /** Sets the billboard constraint. */
+        public Builder billboard(Display.Billboard value) {
+            billboard = value;
+            return this;
+        }
+
+        /** Sets the immutable local transformation. */
+        public Builder transform(DisplayTransform value) {
+            transform = value;
+            return this;
+        }
+
+        /** Sets block light; use -1 together with sky light for world lighting. */
+        public Builder blockLight(int value) {
+            blockLight = value;
+            return this;
+        }
+
+        /** Sets sky light from 0 to 15 or -1 for world lighting. */
+        public Builder skyLight(int value) {
+            skyLight = value;
+            return this;
+        }
+
+        /** Sets transformation interpolation duration. */
+        public Builder interpolationTicks(int value) {
+            interpolationTicks = value;
+            return this;
+        }
+
+        /** Sets position interpolation duration from 0 to 59 ticks. */
+        public Builder teleportTicks(int value) {
+            teleportTicks = value;
+            return this;
+        }
+
+        /** Sets the nonnegative shadow radius. */
+        public Builder shadowRadius(float value) {
+            shadowRadius = value;
+            return this;
+        }
+
+        /** Sets shadow opacity from 0 to 1. */
+        public Builder shadowStrength(float value) {
+            shadowStrength = value;
+            return this;
+        }
+
+        /** Sets nonnegative culling width; zero disables horizontal culling. */
+        public Builder width(float value) {
+            width = value;
+            return this;
+        }
+
+        /** Sets nonnegative culling height; zero disables vertical culling. */
+        public Builder height(float value) {
+            height = value;
+            return this;
+        }
+
+        /** Enables the glowing outline. */
+        public Builder glowing(boolean value) {
+            glowing = value;
+            return this;
+        }
+
+        /** Sets packed RGB glow color or -1 for the default. */
+        public Builder glowColor(int value) {
+            glowColor = value;
+            return this;
+        }
+
+        /** Validates settings and returns an immutable snapshot. */
+        public DisplayStyle build() {
+            return new DisplayStyle(billboard, transform, blockLight, skyLight, interpolationTicks, teleportTicks, shadowRadius, shadowStrength, width, height, glowing, glowColor);
+        }
+    }
+
 }

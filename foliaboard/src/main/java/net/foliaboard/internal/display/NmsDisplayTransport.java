@@ -116,6 +116,18 @@ public final class NmsDisplayTransport implements DisplayTransport {
 
         private void install() {
             if (closed.get()) return;
+            Map<Method, Method> forwarding = new HashMap<>();
+            Class<?> contextClass = Reflect.clazz("io.netty.channel.ChannelHandlerContext");
+            for (Method method : handlerClass.getMethods()) {
+                if (method.getName().equals("handlerAdded") || method.getName().equals("handlerRemoved")) continue;
+                String destination = method.getName().equals("exceptionCaught") ? "fireExceptionCaught" : method.getName();
+                try {
+                    forwarding.put(method, contextClass.getMethod(destination,
+                            Arrays.copyOfRange(method.getParameterTypes(), 1, method.getParameterCount())));
+                } catch (NoSuchMethodException failure) {
+                    throw new IllegalStateException("Missing channel forwarding method " + destination, failure);
+                }
+            }
             Object handler = Proxy.newProxyInstance(handlerClass.getClassLoader(), new Class<?>[]{handlerClass},
                     (proxy, method, args) -> {
                         String name = method.getName();
@@ -133,8 +145,7 @@ public final class NmsDisplayTransport implements DisplayTransport {
                                 close();
                             }
                         }
-                        String destination = name.equals("exceptionCaught") ? "fireExceptionCaught" : name;
-                        call(context, destination, forwarded);
+                        Reflect.invoke(forwarding.get(method), context, forwarded);
                         return null;
                     });
             call(pipeline, "addBefore", "packet_handler", handlerName, handler);
@@ -266,7 +277,7 @@ public final class NmsDisplayTransport implements DisplayTransport {
 
         private int[] mounted(int vehicle) {
             return rendered.values().stream().filter(value -> value.frame().vehicle() == vehicle
-                    && value.frame().accepted().getAsBoolean()).mapToInt(Rendered::entity).sorted().toArray();
+                    && value.frame().retained().getAsBoolean()).mapToInt(Rendered::entity).sorted().toArray();
         }
 
         private void mount(int vehicle) {
@@ -308,6 +319,11 @@ public final class NmsDisplayTransport implements DisplayTransport {
                 failures.accept(failure);
                 closed.set(true);
             }
+        }
+
+        @Override
+        public boolean isClosed() {
+            return closed.get();
         }
 
         @Override

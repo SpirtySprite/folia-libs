@@ -333,6 +333,157 @@ class DisplayServiceTest {
                 PassengerLists.merge(new int[]{4, 2}, new int[]{9, 2, 10}));
     }
 
+    @Test
+    void quitBeforeBootstrapClosesPendingOwnerHandle() {
+        var tag = displays.nametag(owner, Component.text("pending"));
+        displays.onQuit(owner);
+        scheduler.advanceTicks(4);
+        assertTrue(tag.isClosed());
+        assertEquals(0, displays.stats().handles());
+        assertEquals(0, displays.stats().viewers());
+    }
+
+    @Test
+    void replacingOwnerSessionDoesNotLeaveIdleViewerTasks() {
+        var tag = nametag();
+        displays.onJoin(player(owner.getUniqueId()));
+        assertTrue(tag.isClosed());
+        assertEquals(0, displays.stats().viewers());
+    }
+
+    @Test
+    void queuedFramesRejectNewInvisibilityTrackingAndViewerRange() {
+        nametag();
+        var old = frames(viewer).getFirst();
+        when(owner.isInvisible()).thenReturn(true);
+        scheduler.advanceTicks(2);
+        assertFalse(old.accepted().getAsBoolean());
+        when(owner.isInvisible()).thenReturn(false);
+        scheduler.advanceTicks(2);
+        old = frames(viewer).getFirst();
+        when(owner.getTrackedBy()).thenReturn(Set.of());
+        scheduler.advanceTicks(2);
+        assertFalse(old.accepted().getAsBoolean());
+        when(owner.getTrackedBy()).thenReturn(Set.of(viewer));
+        scheduler.advanceTicks(2);
+        old = frames(viewer).getFirst();
+        when(viewer.getLocation()).thenReturn(new Location(world, 500, 64, 1));
+        scheduler.advanceTicks(2);
+        assertFalse(old.accepted().getAsBoolean());
+    }
+
+    @Test
+    void queuedFramesRejectProviderFiltersAndAnyContentMutation() {
+        var tag = nametag();
+        var old = frames(viewer).getFirst();
+        tag.text(Component.text("new"));
+        assertFalse(old.accepted().getAsBoolean());
+        assertTrue(old.retained().getAsBoolean());
+        scheduler.advanceTicks(2);
+        old = frames(viewer).getFirst();
+        when(viewer.canSee(owner)).thenReturn(false);
+        scheduler.advanceTicks(2);
+        assertFalse(old.accepted().getAsBoolean());
+        assertFalse(old.retained().getAsBoolean());
+    }
+
+    @Test
+    void fixedMovesPreserveClientGenerationWhileRejectingQueuedPositions() {
+        var tag = displays.text(new Location(world, 1, 64, 1), Component.text("fixed"));
+        scheduler.advanceTicks(4);
+        var old = frames(viewer).getFirst();
+        tag.location(new Location(world, 3, 65, 3));
+        assertFalse(old.accepted().getAsBoolean());
+        scheduler.advanceTicks(2);
+        assertEquals(old.generation(), frames(viewer).getFirst().generation());
+        assertEquals(3, frames(viewer).getFirst().x());
+    }
+
+    @Test
+    void failedTransportRetriesAfterBackoffWithoutClosingHandles() {
+        var tag = nametag();
+        FakeConnection broken = transport.connections.get(viewer.getUniqueId());
+        broken.closed = true;
+        scheduler.advanceTicks(5);
+        assertEquals(broken, transport.connections.get(viewer.getUniqueId()));
+        scheduler.advanceTicks(20);
+        assertNotEquals(broken, transport.connections.get(viewer.getUniqueId()));
+        assertEquals(1, frames(viewer).size());
+        assertFalse(tag.isClosed());
+    }
+
+    @Test
+    void buildersPreserveIndependentSettingsAndValidateOnBuild() {
+        var builder = DisplayStyle.builder().shadowRadius(2).shadowStrength(0.5f).blockLight(15).skyLight(10)
+                .billboard(org.bukkit.entity.Display.Billboard.FIXED).width(3).height(4).glowing(true).glowColor(0xff0000)
+                .teleportTicks(5).interpolationTicks(8).transform(DisplayTransform.identity().scaled(2, 2, 2));
+        var style = builder.build();
+        builder.shadowRadius(7);
+        assertEquals(2, style.shadowRadius());
+        assertEquals(15, style.blockLight());
+        assertEquals(10, style.skyLight());
+        assertEquals(style, style.toBuilder().build());
+        var tag = nametag();
+        tag.style(style);
+        tag.textStyle(TextDisplayStyle.builder().lineWidth(150).background(0x80000000).opacity(200).shadow(false)
+                .seeThrough(true).defaultBackground(true).alignment(org.bukkit.entity.TextDisplay.TextAlignment.LEFT).build());
+        tag.visibility(DisplayVisibility.builder().range(90).selfVisible(false).hideInvisible(false)
+                .hideSneaking(true).hideSpectators(false).build());
+        assertEquals(style, tag.style());
+        assertEquals(150, tag.textStyle().lineWidth());
+        assertEquals(tag.textStyle(), tag.textStyle().toBuilder().build());
+        assertEquals(90, tag.visibility().range());
+        assertEquals(tag.visibility(), tag.visibility().toBuilder().build());
+        tag.visible(false);
+        assertFalse(tag.isVisible());
+        assertThrows(IllegalArgumentException.class, () -> DisplayStyle.builder().blockLight(5).build());
+        assertThrows(IllegalArgumentException.class, () -> TextDisplayStyle.builder().opacity(256).build());
+        assertThrows(IllegalArgumentException.class, () -> DisplayVisibility.builder().range(-1).build());
+        var item = displays.item(new Location(world, 1, 64, 1), item(1));
+        item.itemTransform(org.bukkit.entity.ItemDisplay.ItemDisplayTransform.GUI);
+        assertEquals(org.bukkit.entity.ItemDisplay.ItemDisplayTransform.GUI, item.itemTransform());
+    }
+
+    @Test
+    void viewerStylesAreResolvedAfterSelfPolicyAndResetBySharedSetters() {
+        var tag = nametag();
+        var style = DisplayStyle.builder().glowing(true).glowColor(0x112233).build();
+        var text = TextDisplayStyle.builder().background(0x80000000).build();
+        tag.styleFor(player -> {
+            assertEquals(viewer, player);
+            return style;
+        });
+        tag.textStyleFor(player -> text);
+        scheduler.advanceTicks(2);
+        assertTrue(frames(owner).isEmpty());
+        assertEquals(style, frames(viewer).getFirst().style());
+        assertEquals(text, frames(viewer).getFirst().textStyle());
+        tag.styleFor(player -> { throw new IllegalStateException("unavailable"); });
+        scheduler.advanceTicks(2);
+        assertTrue(frames(viewer).isEmpty());
+        tag.style(DisplayStyle.defaults());
+        tag.textStyle(TextDisplayStyle.defaults());
+        scheduler.advanceTicks(2);
+        assertEquals(DisplayStyle.defaults(), frames(viewer).getFirst().style());
+        assertEquals(TextDisplayStyle.defaults(), frames(viewer).getFirst().textStyle());
+    }
+
+    @Test
+    void retiredOwnerRejectsCreationAndReleasesActiveHandles() {
+        var tag = nametag();
+        scheduler.retire(owner);
+        assertTrue(tag.isClosed());
+        assertEquals(0, displays.stats().viewers());
+        var late = displays.nametag(owner, Component.text("retired"));
+        assertTrue(late.isClosed());
+        scheduler.advanceTicks(4);
+        assertEquals(0, displays.stats().handles());
+        assertEquals(0, displays.stats().viewers());
+        displays.text(new Location(world, 1, 64, 1), Component.text("fresh"));
+        scheduler.advanceTicks(4);
+        assertEquals(1, frames(viewer).size());
+    }
+
     private static ItemStack item(int amount) {
         ItemStack item = mock(ItemStack.class);
         java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(amount);
@@ -369,6 +520,7 @@ class DisplayServiceTest {
 
     private static final class FakeConnection implements DisplayTransport.Connection {
         private List<DisplayFrame> frames = List.of();
+        private boolean closed;
 
         @Override
         public void present(List<DisplayFrame> frames) {
@@ -377,7 +529,13 @@ class DisplayServiceTest {
 
         @Override
         public void close() {
+            closed = true;
             frames = List.of();
+        }
+
+        @Override
+        public boolean isClosed() {
+            return closed;
         }
 
         @Override

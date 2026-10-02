@@ -14,5 +14,5 @@ public record DisplayFrame(UUID id, long generation, UUID world, double x, doubl
                            float yaw, float pitch, int vehicle, float mountCorrection,
                            Component text, ItemStack item, ItemDisplay.ItemDisplayTransform itemTransform,
                            DisplayStyle style, TextDisplayStyle textStyle, double range,
-                           BooleanSupplier accepted, List<Integer> nativePassengers) {
+                           BooleanSupplier accepted, BooleanSupplier retained, List<Integer> nativePassengers) {
 }

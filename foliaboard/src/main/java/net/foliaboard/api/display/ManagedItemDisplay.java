@@ -16,6 +16,9 @@ public interface ManagedItemDisplay extends ManagedDisplay {
     /** Sets a provider run on each viewer's owning thread. Exceptions suppress that viewer's presentation. */
     void itemFor(Function<Player, ItemStack> provider);
 
+    /** Returns the configured Minecraft item rendering context. */
+    ItemDisplay.ItemDisplayTransform itemTransform();
+
     /** Sets the Minecraft item rendering context. */
     void itemTransform(ItemDisplay.ItemDisplayTransform transform);
 }

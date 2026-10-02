@@ -68,6 +68,28 @@ scale, lighting, interpolation, shadow, culling dimensions and glow. Item displa
 Minecraft item rendering context. The API targets the repository's existing 1.20.6 to 1.21.11
 range and adds no dependencies.
 
+Builders expose every rendering and visibility option and `toBuilder()` preserves other settings.
+Shared settings getters return immutable values without exposing Bukkit entities:
+
+```java
+nametag.style(nametag.style().toBuilder().billboard(Display.Billboard.CENTER)
+        .interpolationTicks(5).glowing(true).glowColor(0xffcc00).build());
+nametag.textStyle(nametag.textStyle().toBuilder().lineWidth(180)
+        .background(0x80000000).opacity(230).build());
+nametag.visibility(nametag.visibility().toBuilder().hideSneaking(true).build());
+nametag.styleFor(viewer -> DisplayStyle.builder().glowColor(viewerColors.get(viewer.getUniqueId()))
+        .glowing(true).build());
+nametag.textStyleFor(viewer -> TextDisplayStyle.builder().background(0x80000000).build());
+fixedText.location(nextLocation);
+```
+
+`styleFor` and `textStyleFor` run on the viewer's owning thread with the same visibility gates and
+exception isolation as content providers. Shared setters clear the corresponding provider; getters
+return shared settings rather than evaluating a provider. Same-world fixed movement retains client
+entity IDs and honors position interpolation; world changes and attachment changes recreate them.
+Queued work is invalidated by setting changes and rechecks current captured audience/owner state.
+Failed packet connections retry after a 20-tick backoff while the handle stays registered.
+
 The integration client checks received display metadata, passenger packets and final cleanup.
 Enable the second client to check remote nametags, self hiding, death/respawn and region transfers:
 

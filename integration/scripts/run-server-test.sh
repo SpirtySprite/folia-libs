@@ -210,6 +210,7 @@ need(seen["npcNametagMoved"], "received existing nametag display position update
 need(seen["npcEquipmentSeen"], "received NPC equipment")
 need(seen["npcEquipmentCleared"], "received an explicit NPC equipment clear")
 need(seen["boardFixedText"] and seen["boardItems"] > 0, "received managed text and item displays")
+need(seen["boardFixedMoved"], "fixed display moved without recreation")
 need(seen["boardPassengerMounted"], "received client passenger attachments")
 need(seen["boardNativePassengerPreserved"], "client passenger attachments preserved a native passenger")
 need(seen["boardSelfHidden"], "never received owner-hidden display text")

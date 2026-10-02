@@ -1,0 +1,39 @@
+{
+  "sourceCommit": "ba38e63fda76054a81c1b021949da302bd4ad279",
+  "workflowRunUrl": "https://github.com/SpirtySprite/folia-libs/actions/runs/36990905310",
+  "workflowRunId": 36990905310,
+  "workflowRunNumber": 4,
+  "workflowJobId": 110786641728,
+  "jobStartedAt": "2026-10-02T09:39:17Z",
+  "jobCompletedAt": "2026-10-02T10:06:07Z",
+  "measurementStepStartedAt": "2026-10-02T09:39:40Z",
+  "measurementStepCompletedAt": "2026-10-02T10:06:04Z",
+  "runnerName": "nsc-runner-chh4lj0up0bme",
+  "runnerProfile": "namespace-profile-libs",
+  "machineDescription": "Linux x86_64, 8 logical CPUs",
+  "mode": "full",
+  "filter": "",
+  "profilers": [
+    "gc"
+  ],
+  "benchmarkCases": 92,
+  "forksPerCase": 2,
+  "measurementIterationsPerFork": 5,
+  "warmupIterationsPerFork": 3,
+  "jmhVersion": "1.37",
+  "jdkVersion": "21.0.12.1",
+  "vmName": "OpenJDK 64-Bit Server VM",
+  "jvmArgs": [],
+  "libraryVersions": {
+    "folia-commons": "1.1.1",
+    "foliaboard": "1.3.1",
+    "foliagui": "1.3.1",
+    "folianpc": "1.4.1"
+  },
+  "originalArtifactName": "benchmark-results",
+  "originalJsonFile": "ci-4.json",
+  "originalMarkdownFile": "ci-4.md",
+  "rawJsonSha256": "8af3c270e021ca692d26a6ed0bb0a4ef3399281e78db3850a377f02c785631e7",
+  "reportGeneratorCommit": "8ce41aa7ad888ffce242ad12c7c56e7fc67eff7d",
+  "reportNotes": "Markdown regenerated from unchanged workflow JSON to include GC allocation metrics. Historical quick-mode runs use different hardware and are not a before/after comparison. Managed displays and nametag compositions have no dedicated cases in this suite."
+}

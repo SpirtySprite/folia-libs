@@ -39,6 +39,11 @@ def params_text(params):
     return ", ".join(f"{k}={v}" for k, v in params.items()) if params else ""
 
 
+def allocation_metric(entry):
+    metrics = entry.get("secondaryMetrics", {})
+    return metrics.get("gc.alloc.rate.norm") or metrics.get("·gc.alloc.rate.norm")
+
+
 def main(path, machine=None):
     with open(path) as handle:
         results = json.load(handle)
@@ -69,7 +74,7 @@ def main(path, machine=None):
 
     for cls, rows in groups.items():
         print(f"## {cls}\n")
-        has_alloc = any("secondaryMetrics" in e and "·gc.alloc.rate.norm" in e["secondaryMetrics"] for _, e in rows)
+        has_alloc = any(allocation_metric(e) is not None for _, e in rows)
         header = "| Benchmark | Parameters | Score | Error |"
         rule = "|---|---|---:|---:|"
         if has_alloc:
@@ -83,7 +88,7 @@ def main(path, machine=None):
             line = (f"| {method} | {params_text(entry.get('params'))} | "
                     f"{fmt(metric['score'], unit)} {unit} | {error_text(metric['scoreError'], unit)} |")
             if has_alloc:
-                alloc = entry.get("secondaryMetrics", {}).get("·gc.alloc.rate.norm")
+                alloc = allocation_metric(entry)
                 line += f" {alloc['score']:,.0f} B |" if alloc else " |"
             print(line)
         print()

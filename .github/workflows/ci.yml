@@ -12,7 +12,7 @@ jobs:
   # Board, NPC and the shared core support several Paper API versions, so build them against each.
   compat:
     name: Paper API ${{ matrix.paper }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-libs
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +39,7 @@ jobs:
   # FoliaGUI's tests run against MockBukkit, which is tied to one Paper version.
   gui:
     name: FoliaGUI
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-libs
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -52,7 +52,7 @@ jobs:
   # Not a measurement: proves every benchmark still builds and runs, so they do not rot.
   benchmarks-smoke:
     name: Benchmarks still run
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-libs
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -69,7 +69,7 @@ jobs:
   # tests cannot catch a class that is missing on an older server or a reflection lookup that changed.
   servers:
     name: ${{ matrix.server }} ${{ matrix.minecraft }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-libs
     timeout-minutes: 20
     strategy:
       fail-fast: false

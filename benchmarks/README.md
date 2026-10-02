@@ -9,6 +9,10 @@ JMH benchmarks for folia-commons, FoliaBoard, FoliaGUI and FoliaNPC. They answer
 The latest numbers are in [`results/`](results/). Read [What these numbers do not tell you](#what-these-numbers-do-not-tell-you)
 before quoting any of them.
 
+The latest full suite report is [Namespace, October 2, 2026](results/namespace-full-2026-10-02.md),
+with [raw JMH data](results/namespace-full-2026-10-02.json) and
+[run provenance](results/namespace-full-2026-10-02.metadata.json).
+
 ## Running
 
 From the root of the repository. The benchmarks are behind a Maven profile, so a normal `mvn verify` does
@@ -73,6 +77,9 @@ how much of the 100 ms between passes one pass uses.
 - **They are not server timings.** Real packet construction and sending (reflection into the server's
   classes, Netty) is not included. The NPC numbers cover deciding who sees what, not the cost of the
   spawn packets that follow.
+- **They cover the cases listed above.** Managed displays and nametag compositions do not have
+  dedicated benchmark cases in this suite; their rendering or transport cost cannot be inferred
+  from the sidebar figures.
 - **They are single-threaded.** Folia spreads work across region threads. These numbers say how much work
   one thread does, which is the useful figure for a budget, but they say nothing about contention.
 - **Hardware varies.** A result from a laptop and a result from a CI runner cannot be compared. Compare two
@@ -93,4 +100,6 @@ how much of the 100 ms between passes one pass uses.
 
 CI runs the `smoke` mode on every pull request so the benchmarks cannot rot. The **Benchmarks** workflow
 can be started by hand from the Actions tab; it runs the full suite and uploads the JSON and the report.
-GitHub's shared runners are noisy, so treat those numbers as a rough check, not a record.
+The workflow uses Namespace runner profile `namespace-profile-libs`. Runner results remain
+environment-specific; compare repeated measurements on the same configured runner rather than
+comparing them directly with the older GitHub-hosted or desktop results.

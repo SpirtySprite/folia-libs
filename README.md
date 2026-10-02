@@ -77,6 +77,12 @@ Versions between the tested ones probably work but are not tested. Other Minecra
 
 ## Performance
 
+The latest full suite report is [Namespace, October 2, 2026](benchmarks/results/namespace-full-2026-10-02.md).
+It measures all 92 existing cases on commit `ba38e63`, including the latest merged library changes,
+with two forks and GC allocation profiling. [Raw data and provenance](benchmarks/results/README.md)
+are published alongside the report. The quick-mode figures below remain historical results from
+older hardware and code; they are not a direct speed comparison with the Namespace baseline.
+
 These figures come from automated benchmarks that you can run yourself (see [benchmarks/](benchmarks/README.md)).
 They answer one question: **how much work does each library add to my server?**
 

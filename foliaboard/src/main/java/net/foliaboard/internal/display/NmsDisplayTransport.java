@@ -139,7 +139,11 @@ public final class NmsDisplayTransport implements DisplayTransport {
                         if (name.equals("hashCode")) return System.identityHashCode(proxy);
                         if (name.equals("equals")) return proxy == args[0];
                         if (name.equals("toString")) return handlerName;
-                        if (name.equals("handlerAdded") || name.equals("handlerRemoved")) return null;
+                        if (name.equals("handlerAdded")) return null;
+                        if (name.equals("handlerRemoved")) {
+                            installed = false;
+                            return null;
+                        }
                         Object context = args[0];
                         Object[] forwarded = Arrays.copyOfRange(args, 1, args.length);
                         if (name.equals("write")) {
@@ -382,7 +386,7 @@ public final class NmsDisplayTransport implements DisplayTransport {
             pending.set(null);
             execute(() -> {
                 try {
-                    for (UUID id : List.copyOf(rendered.keySet())) {
+                    for (UUID id : Boolean.TRUE.equals(call(channel, "isActive")) ? List.copyOf(rendered.keySet()) : List.<UUID>of()) {
                         try {
                             erase(id);
                         } catch (RuntimeException failure) {
@@ -393,8 +397,8 @@ public final class NmsDisplayTransport implements DisplayTransport {
                     rendered.clear();
                     count = 0;
                     if (installed) {
-                        call(pipeline, "remove", handlerName);
                         installed = false;
+                        removeHandler(pipeline, handlerName);
                     }
                     nativePassengers.clear();
                     missingVehicles.clear();
@@ -402,6 +406,10 @@ public final class NmsDisplayTransport implements DisplayTransport {
                 }
             });
         }
+    }
+
+    static void removeHandler(Object pipeline, String name) {
+        if (call(pipeline, "get", name) != null) call(pipeline, "remove", name);
     }
 
     private static Object call(Object instance, String name, Object... args) {

@@ -1,5 +1,222 @@
 # FoliaBoard
 
+## Managed text and item displays
+
+`displays()` is an experimental API for virtual TextDisplay and ItemDisplay entities. It creates no
+world entities and never calls `addPassenger` on a Bukkit player. Attached displays are passengers
+on each viewer's client, so their movement follows the player's client movement without moving
+real passenger entities between Folia regions.
+
+```java
+var nametag = board.displays().nametag(player, Component.text("Player name"));
+nametag.attach(player, 0.25);
+nametag.textStyle(TextDisplayStyle.defaults());
+nametag.style(DisplayStyle.defaults().transformed(
+        DisplayTransform.identity().scaled(0.8f, 0.8f, 0.8f)));
+nametag.hide(specificViewer.getUniqueId());
+nametag.refresh();
+
+var item = board.displays().item(player, 0.8, new ItemStack(Material.DIAMOND));
+item.itemTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+
+var fixedText = board.displays().text(location, Component.text("Multiline\nText"));
+fixedText.textFor(viewer -> Component.text(viewer.getName()));
+fixedText.close();
+```
+
+Import the display API from `net.foliaboard.api.display`. All entry points are safe from any thread.
+Locations and item inputs are copied; callers must not mutate an input while it is being copied.
+Viewer predicates and content providers run on the viewer's owning thread. They must not read
+another player's live state or perform blocking I/O. Use previously captured immutable data for
+target-specific content. Provider exceptions suppress that viewer's display and increment
+`displays().stats().providerFailures()`.
+
+The default visibility policy hides attached displays from their owner, invisible targets and
+spectators. It requires native player tracking, `viewer.canSee(target)`, the same world and a
+48-block range. Self hiding is checked before providers and again before queued packet work.
+`show(ownerUuid)`, refresh, teleport recovery and native passenger updates cannot override it.
+Only an explicit policy with `selfVisible=true` enables owner visibility. UUID exclusions survive
+viewer reconnects for the handle's lifetime. `visible(false)` suppresses everyone without deleting
+the definition. `close()` is permanent and rejects further mutations.
+
+Successful teleport events, world changes, death and respawn invalidate queued presentations.
+After a short settling period, the owner scheduler captures the actual position and pose and
+recreates accepted client displays with fresh entity IDs. Cancelled teleport events do not reset
+the display. Rapid transitions invalidate older work. The owner's current passenger attachment
+height determines the transform correction, including pose and scale changes. Native passenger
+packets retain their passenger IDs and order; the library adds only its accepted virtual IDs.
+Tracking loss destroys the virtual passengers, and tracking recovery permits recreation.
+
+Owner disconnect closes attached handles. Create a new handle for the new login session. Fixed
+displays remain registered until closed and are shown to eligible viewers after join or world
+change. Virtual displays do not keep chunks loaded or leave entities in saved worlds.
+
+Vanilla player names remain a separate scoreboard-team feature. To replace them, configure
+`board.nametags().get(player).nametagVisibility(Nametag.Visibility.NEVER).apply()` as well. The
+display service does not take ownership of another plugin's nametag team or restore its settings.
+
+Check `displays().supported()` or `diagnose()` before creation. If the packet backend cannot bind,
+creation reports an unsupported operation while the other FoliaBoard services remain usable.
+`DisplayStats` reports handles, sessions, client entities and provider/transport failures;
+`presentationStats()` includes the `DISPLAY` surface. Rendering and cleanup are asynchronous.
+Other plugins that rewrite or cancel entity packets can affect client presentation; FoliaBoard
+cannot guarantee visibility against a competing packet implementation or a modified client.
+
+Text styles expose line width, ARGB background, unsigned opacity, shadow, see-through, default
+background and alignment. Shared styles expose billboard, translation, quaternion rotations,
+scale, lighting, interpolation, shadow, culling dimensions and glow. Item displays support every
+Minecraft item rendering context. The API targets the repository's existing 1.20.6 to 1.21.11
+range and adds no dependencies.
+
+Builders expose every rendering and visibility option and `toBuilder()` preserves other settings.
+Shared settings getters return immutable values without exposing Bukkit entities:
+
+```java
+nametag.style(nametag.style().toBuilder().billboard(Display.Billboard.CENTER)
+        .interpolationTicks(5).glowing(true).glowColor(0xffcc00).build());
+nametag.textStyle(nametag.textStyle().toBuilder().lineWidth(180)
+        .background(0x80000000).opacity(230).build());
+nametag.visibility(nametag.visibility().toBuilder().hideSneaking(true).build());
+nametag.styleFor(viewer -> DisplayStyle.builder().glowColor(viewerColors.get(viewer.getUniqueId()))
+        .glowing(true).build());
+nametag.textStyleFor(viewer -> TextDisplayStyle.builder().background(0x80000000).build());
+fixedText.location(nextLocation);
+```
+
+`styleFor` and `textStyleFor` run on the viewer's owning thread with the same visibility gates and
+exception isolation as content providers. Shared setters clear the corresponding provider; getters
+return shared settings rather than evaluating a provider. Same-world fixed movement retains client
+entity IDs and honors position interpolation; world changes and attachment changes recreate them.
+Queued work is invalidated by setting changes and rechecks current captured audience/owner state.
+Failed packet connections retry after a 20-tick backoff while the handle stays registered.
+
+The integration client checks received display metadata, passenger packets and final cleanup.
+Enable the second client to check remote nametags, self hiding, death/respawn and region transfers:
+
+```sh
+DISPLAY_TWO_VIEWER=true BOT_JAR="$PWD/integration-bot/target/folia-integration-bot.jar" \
+  integration/scripts/run-server-test.sh folia 1.21.11
+```
+
+Build the integration plugin and matching protocol client first, as described in
+[CONTRIBUTING.md](../CONTRIBUTING.md#tests-on-real-servers).
+
+### Coordinated nametag compositions
+
+`ManagedNametag<T>` combines keyed text lines and item badges into one developer-defined
+composition. Layouts, profiles and policies are immutable. No rank, health, guild or status
+content is supplied automatically. The existing single-display APIs remain supported.
+
+```java
+var layout = NametagLayout.builder()
+        .text("name", Component.text("Player name"), 0.25)
+        .text("subtitle", Component.text("Your content"), 0.55)
+        .item("badge", new ItemStack(Material.EMERALD), 0.85)
+        .build();
+var profile = NametagProfile.builder()
+        .layout(layout)
+        .visibility(DisplayVisibility.builder().range(48).hideSneaking(true).build())
+        .refresh(new NametagRefresh(5, 2))
+        .transition(new NametagTransition(4, 4))
+        .distance(new NametagDistance(24, 48, 1.0f, 0.6f))
+        .build();
+board.displays().profiles().register("custom", profile);
+var tag = board.displays().nametag(player,
+        board.displays().profiles().find("custom").orElseThrow());
+tag.lockOwnerHidden();
+tag.persistent(true);
+tag.replaceVanillaName(true);
+```
+
+Stable element keys retain client entity identity across content updates. Changing an element
+between text and item recreates that element. A layout replacement is evaluated as one frame
+and its packet changes are sent together in a client bundle. `tag.layout(nextLayout)` replaces
+the base layout; `tag.profile(nextProfile)` replaces all base policies. Registry entries are
+immutable values, so changing a registration does not mutate tags already using that profile.
+`profiles().names()` returns a snapshot and `profiles().remove(name)` removes a registration.
+
+Use the full `NametagLayout.Text` and `NametagLayout.Item` constructors through
+`builder().element(...)` for independent styles, item rendering contexts and distance bands.
+Each element has an inclusive minimum and exclusive maximum distance:
+
+```java
+var detail = new NametagLayout.Text("detail", Component.text("Close-range content"), 0.55,
+        DisplayStyle.builder().billboard(Display.Billboard.CENTER).build(),
+        TextDisplayStyle.builder().shadow(true).build(), 0, 16);
+tag.layout(NametagLayout.builder().element(detail).build());
+```
+
+Owner sampling runs on the attached entity's owning region. Viewer rendering runs on the
+viewer's owning region using the last successful immutable snapshot. These callbacks must
+not block or access another region's live state. Return a record or another immutable value:
+
+```java
+record OwnerData(String name, double height) {}
+var dynamic = board.displays().nametag(player, profile,
+        entity -> new OwnerData(entity.getName(), entity.getHeight()),
+        (viewer, snapshot, selected) -> NametagLayout.builder()
+                .text("name", Component.text(snapshot.name()), 0.25)
+                .build());
+dynamic.renderer((viewer, snapshot, selected) -> selected.layout());
+dynamic.refreshData();
+Optional<OwnerData> captured = dynamic.snapshot();
+```
+
+`NametagRefresh` independently controls sampling and layout evaluation intervals in ticks.
+Visibility and owner attachment checks continue every tick. Brief tracking, range or invisibility
+suppression invalidates the cached layout so an eligible viewer recovers on the next evaluation
+without waiting for its layout refresh deadline. `refreshData()` requests fresh sampling and
+viewer layouts; inherited `refresh()` recreates presentations. Sampler failure
+clears stale data, renderer failure suppresses the affected viewer, and both increment provider
+failure counters. Setting a base layout preserves a custom renderer; the renderer decides how
+to use the selected profile.
+
+Temporary layers replace the entire active profile. Highest priority wins, with the newest
+layer breaking ties. Closing or expiring a layer restores the next active profile, including
+base updates made while it was covered. Expiry uses global ticks and zero duration requires
+explicit closure:
+
+```java
+var layer = tag.layer(profile.toBuilder()
+        .layout(NametagLayout.builder().text("notice", Component.text("Your notice"), 0.25).build())
+        .build(), 10, 60);
+if (!layer.isClosed()) layer.close();
+tag.listener(event -> notifications.add(event));
+NametagStatus status = tag.diagnose(viewerId);
+```
+
+`NametagEvent` reports presentation evaluation, suppression, recreation, sampling, failure and
+closure. It is not a client acknowledgement. Viewer events run on the viewer region, sampling
+events on the owner region, and explicit closure on the caller thread. Listener exceptions
+are isolated. `diagnose(UUID)` provides the last evaluation reason and element count.
+
+Fades apply to explicit visibility changes and viewer predicates. Exclusions, owner hiding,
+tracking loss, vanish, world changes and other privacy gates remove displays immediately.
+Text fades use opacity; item fades use scale because item displays have no opacity metadata.
+Distance styling multiplies element scale and opacity, while distance bands select details.
+`lockOwnerHidden()` permanently excludes this handle's current and subsequent owners, even
+after `show`, profile changes, layers, reconnects or conversion to fixed placement.
+
+Persistence is opt-in and retains the definition by player UUID in this runtime. Reconnecting
+binds the new player instance and samples fresh owner data. It does not write to disk or keep
+the departed player instance. Turning persistence off while the owner is offline closes the
+definition. Non-player attachments end when their entity retires:
+
+```java
+var mobTag = board.displays().nametag(livingEntity, profile);
+mobTag.attach(anotherEntity, 0.2);
+var mobText = board.displays().text(livingEntity, 0.25, Component.text("Your text"));
+var mobItem = board.displays().item(livingEntity, 0.8, new ItemStack(Material.DIAMOND));
+```
+
+Entity attachments use the native client passenger position and the entity's sampled height.
+They create no real passengers. Entity teleports invalidate old frames and rebuild after
+settling. `replaceVanillaName(true)` explicitly acquires a visibility lease in this runtime's
+team service. Overlapping leases share ownership; the last release restores prior visibility
+or removes a team created solely for replacement. Developer visibility changes are preserved.
+`replaceVanillaName(false)`, reattachment and closure release the lease. Foreign plugins' team
+ownership and packet interception can still conflict with presentation.
+
 A **Folia-native, packet-level scoreboard API** for Paper & Folia. It removes the single hardest part
 of scoreboards on Folia — knowing *which thread* may touch a player's board and not racing when they
 move between regions — and gives you a fluent, MiniMessage-first API where **every call is safe from
@@ -51,6 +268,7 @@ board.createBoard(player)
 19. [API reference](#api-reference)
 20. [Version support & the honest caveat](#version-support--the-honest-caveat)
 21. [Building from source](#building-from-source)
+22. [Managed text and item displays](#managed-text-and-item-displays)
 
 ---
 

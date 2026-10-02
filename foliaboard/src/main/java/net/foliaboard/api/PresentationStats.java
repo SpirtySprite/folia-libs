@@ -29,7 +29,9 @@ public record PresentationStats(Map<Surface, Counters> surfaces) {
         /** Player list header, footer, name and order. */
         TAB,
         /** Boss-bar properties, showing and hiding. */
-        BOSS_BAR
+        BOSS_BAR,
+        /** Managed text and item display presentation. */
+        DISPLAY
     }
 
     /** Requested refreshes or mutations compared with operations actually applied after filtering and diffing. */

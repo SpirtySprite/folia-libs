@@ -1,5 +1,7 @@
 package net.foliaboard.internal.service;
 
+import net.foliaboard.internal.display.DisplayService;
+
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
@@ -11,16 +13,18 @@ public final class BoardLifecycle {
     private final BossBarService bossBars;
     private final NametagService nametags;
     private final ObjectiveService objectives;
+    private final DisplayService displays;
 
     public BoardLifecycle(@NotNull BoardRuntime runtime, @NotNull SidebarService sidebars, @NotNull TabService tabs,
                           @NotNull BossBarService bossBars, @NotNull NametagService nametags,
-                          @NotNull ObjectiveService objectives) {
+                          @NotNull ObjectiveService objectives, @NotNull DisplayService displays) {
         this.runtime = runtime;
         this.sidebars = sidebars;
         this.tabs = tabs;
         this.bossBars = bossBars;
         this.nametags = nametags;
         this.objectives = objectives;
+        this.displays = displays;
     }
 
     public void onJoin(@NotNull Player player) {
@@ -28,6 +32,7 @@ public final class BoardLifecycle {
             return;
         }
         nametags.onJoin(player);
+        displays.onJoin(player);
         objectives.onJoin(player);
         sidebars.onJoinProvider(player);
         tabs.onJoin(player);
@@ -39,10 +44,20 @@ public final class BoardLifecycle {
             return;
         }
         sidebars.onWorldChange(player);
+        displays.onTransition(player);
+    }
+
+    public void onTransition(Player player) {
+        if (!runtime.closed()) displays.onTransition(player);
+    }
+
+    public void onEntityTransition(org.bukkit.entity.Entity entity) {
+        if (!runtime.closed()) displays.onTransition(entity);
     }
 
     public void onQuit(@NotNull Player player) {
         sidebars.onQuit(player);
+        displays.onQuit(player);
         tabs.onQuit(player);
         bossBars.onQuit(player);
         runtime.placeholders().forget(player.getUniqueId());
@@ -56,6 +71,7 @@ public final class BoardLifecycle {
             return false;
         }
         runtime.markClosed();
+        displays.closeAll();
         sidebars.closeAll();
         tabs.closeAll();
         bossBars.closeAll();

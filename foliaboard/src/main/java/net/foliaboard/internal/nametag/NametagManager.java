@@ -63,6 +63,22 @@ public final class NametagManager {
         return impl;
     }
 
+    public AutoCloseable leaseVisibility(Player target) {
+        NametagImpl[] selected = new NametagImpl[1];
+        boolean[] created = {false};
+        byTarget.compute(target.getUniqueId(), (id, existing) -> {
+            NametagImpl value = existing;
+            if (value == null || value.removed()) {
+                created[0] = true;
+                value = new NametagImpl(plugin, adapter, target, generateTeamName(null), online);
+                value.cleanupPlugin(cleanupPlugin); value.metrics(metrics);
+            }
+            selected[0] = value;
+            return value;
+        });
+        return selected[0].leaseVisibility(created[0]);
+    }
+
     private String generateTeamName(@Nullable Integer sortWeight) {
         return Ids.team(namespace, sortWeight, counter.getAndIncrement());
     }

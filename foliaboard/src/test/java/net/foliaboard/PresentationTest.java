@@ -216,7 +216,8 @@ class PresentationTest {
         clearInvocations(adapter, player);
         try (var dispatch = mockStatic(Schedulers.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
             new FoliaBoardListener(board.lifecycle(), owner, board::close).onDisable(new PluginDisableEvent(owner));
-            dispatch.verify(() -> Schedulers.onEntity(eq(host), eq(player), any(Runnable.class)), org.mockito.Mockito.atLeast(5));
+            dispatch.verify(() -> Schedulers.onEntity(eq(host), eq(player), any(Runnable.class)), org.mockito.Mockito.atLeast(4));
+            dispatch.verify(() -> Schedulers.global(eq(host), any(Runnable.class)), org.mockito.Mockito.atLeastOnce());
         }
         scheduler.advanceTicks(3);
         verify(adapter, atLeastOnce()).removeObjective(eq(player), any());

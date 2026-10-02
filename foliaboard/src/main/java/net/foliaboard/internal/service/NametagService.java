@@ -42,6 +42,11 @@ public final class NametagService implements Nametags {
         return manager.getIfPresent(target);
     }
 
+    public AutoCloseable leaseVisibility(Player target) {
+        runtime.ensureOpen();
+        return manager.leaseVisibility(target);
+    }
+
     public int active() {
         return manager.active();
     }

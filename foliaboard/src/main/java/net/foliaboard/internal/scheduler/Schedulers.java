@@ -44,7 +44,12 @@ public final class Schedulers {
 
     public static TaskHandle entityTaskTimer(Plugin plugin, Entity entity, Consumer<TaskHandle> task,
                                              long delay, long period) {
-        return scheduler(plugin).repeatForEntity(entity, task, null, delay, period);
+        return entityTaskTimer(plugin, entity, task, null, delay, period);
+    }
+
+    public static TaskHandle entityTaskTimer(Plugin plugin, Entity entity, Consumer<TaskHandle> task,
+                                             Runnable retired, long delay, long period) {
+        return scheduler(plugin).repeatForEntity(entity, task, retired, delay, period);
     }
 
     public static @NotNull ScheduledHandle globalTimer(@NotNull Plugin plugin, @NotNull Runnable task,
@@ -59,6 +64,10 @@ public final class Schedulers {
 
     public static void asyncLater(@NotNull Plugin plugin, @NotNull Runnable task, @NotNull Duration delay) {
         scheduler(plugin).runAsyncLater(task, delay);
+    }
+
+    public static TaskHandle globalLater(Plugin plugin, Runnable task, long ticks) {
+        return scheduler(plugin).scheduleGlobalLater(task, ticks);
     }
 
     public static void global(@NotNull Plugin plugin, @NotNull Runnable task) {

@@ -66,10 +66,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
     private final java.util.concurrent.atomic.AtomicInteger menuClicks = new java.util.concurrent.atomic.AtomicInteger();
     private final Set<String> npcClicks = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final CompletableFuture<Player> firstPlayer = new CompletableFuture<>();
+    private final CompletableFuture<Player> secondPlayer = new CompletableFuture<>();
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        firstPlayer.complete(event.getPlayer());
+        if (!firstPlayer.complete(event.getPlayer())) secondPlayer.complete(event.getPlayer());
     }
 
     @EventHandler
@@ -346,7 +347,17 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                             boolean allClicked = menuClicks.get() > 0 && npcClicks.contains("LEFT") && npcClicks.contains("RIGHT");
                             if ((ticks == 400 || allClicked && ticks >= 100) && finishing.compareAndSet(false, true)) {
                                 NpcScenario.run(npc, player, scheduler).thenCompose(npcResult ->
-                                        GuiScenario.run(gui, player, scheduler).thenApply(guiResult -> npcResult + "; " + guiResult))
+                                        GuiScenario.run(gui, player, scheduler).thenCompose(guiResult ->
+                                                DisplayScenario.run(board, player, scheduler)
+                                                        .thenCompose(display -> NametagCompositionScenario.run(board, player, scheduler).thenApply(composition -> display + "; " + composition))
+                                                        .thenCompose(displayResult -> {
+                                                    String summary = npcResult + "; " + guiResult + "; " + displayResult;
+                                                    if (!Boolean.getBoolean("it.display.two")) return done(summary);
+                                                    getLogger().info("DISPLAY_TWO_VIEWER_READY");
+                                                    return secondPlayer.thenCompose(viewer ->
+                                                            DisplayViewerScenario.run(board, player, viewer, scheduler))
+                                                            .thenApply(remote -> summary + "; " + remote);
+                                                })))
                                         .whenComplete((guiResult, guiFailure) -> {
                                     scheduler.runForEntity(player, () -> {
                                         expectedDisconnect.set(true);

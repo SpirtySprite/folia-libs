@@ -77,14 +77,16 @@ Versions between the tested ones probably work but are not tested. Other Minecra
 
 ## Performance
 
-The latest full suite report is [Namespace, October 2, 2026](benchmarks/results/namespace-full-2026-10-02.md).
-It measures all 92 existing cases on commit `ba38e63`, including the latest merged library changes,
-with two forks and GC allocation profiling. [Raw data and provenance](benchmarks/results/README.md)
-are published alongside the report. The quick-mode figures below remain historical results from
-older hardware and code; they are not a direct speed comparison with the Namespace baseline.
+These figures come from the [full Namespace run on October 2, 2026](benchmarks/results/namespace-full-2026-10-02.md),
+measuring all 92 existing cases on commit `ba38e63`. The runner used Linux x86_64 with eight logical CPUs,
+JDK 21.0.12.1 and JMH 1.37. Each case used two forks, three one-second warmup iterations and five one-second
+measurement iterations per fork, with GC allocation profiling.
 
-These figures come from automated benchmarks that you can run yourself (see [benchmarks/](benchmarks/README.md)).
-They answer one question: **how much work does each library add to my server?**
+The [full report](benchmarks/results/namespace-full-2026-10-02.md) includes error margins and allocation per call.
+[Raw JSON](benchmarks/results/namespace-full-2026-10-02.json) and
+[run provenance](benchmarks/results/namespace-full-2026-10-02.metadata.json) are published alongside it.
+Historical runs remain in [`benchmarks/results/`](benchmarks/results/); differences in hardware and code
+prevent using them as a direct before/after comparison.
 
 ### How to read the numbers
 
@@ -94,138 +96,119 @@ They answer one question: **how much work does each library add to my server?**
 | 1 µs (microsecond) | one thousandth of a millisecond |
 | 1 ns (nanosecond) | one thousandth of a microsecond |
 
-A Minecraft server has **50 ms per tick**. If everything it does in a tick takes longer than that, the server lags.
-So a library step that takes 0.01 ms is irrelevant, and one that takes 50 ms is a problem.
-
-**Where the numbers come from:** runs on GitHub's shared 4-CPU test machine, in quick mode (the FoliaNPC figures were measured again after its lookup was improved; details in
-[`benchmarks/results/`](benchmarks/results/)). Your server will be faster or slower, so read the numbers as
-*"about this much, and this is what makes it grow"*, not as promises. The benchmarks use stand-ins for the game
-server, so they measure each library's own work. They do not include sending packets over the network.
+Tables below show rounded average time per call, with lower values indicating less work. A Minecraft server
+has a 50 ms tick budget. The benchmarks use stand-ins for the game server and measure work on one thread;
+real packet construction, network sending and live-world access add costs that these figures do not cover.
+Your server's results depend on its hardware and workload.
 
 ### The short version
 
-| Library | What to know |
+| Library | Measured work |
 |---|---|
-| **FoliaBoard** | Cheap. Changing a scoreboard line costs a fraction of a microsecond. The slowest step is turning text with colours into formatted text (5–9 µs), and the library remembers the result, so repeats take about 2 ns. |
-| **FoliaGUI** | Cheap. Redrawing a menu that has not changed costs about 0.2 µs. Changing one item costs about 7 µs. Turning a page takes about 0.4 ms, and it does **not** get slower when the menu holds more entries. |
-| **FoliaNPC** | Cost grows with the number of NPCs times the players **near** them. Even 10,000 NPCs with 500 players spread over a large world take about 3 ms per pass. The worst case is many players crowded around many NPCs: about 20 ms for 10,000 NPCs and 500 players in the same small area. |
-| **folia-commons** | Negligible. Every call is under 1 µs. |
+| **FoliaBoard** | Changing one sidebar line takes 0.094 to 0.187 µs. Parsing simple or gradient text takes about 3.5 to 6.6 µs; a cache hit takes about 4.8 ns. |
+| **FoliaGUI** | An unchanged six-row menu update takes 0.331 ms, changing one slot takes 0.364 ms, and the page benchmarks range from 0.354 to 0.523 ms. |
+| **FoliaNPC** | A steady visibility pass for 10,000 NPCs and 500 players takes 6.839 ms spread out and 48.059 ms crowded. Nearby player density matters. |
+| **folia-commons** | Legacy colour conversion takes 0.006 to 0.178 µs, version parsing takes 0.104 µs, and diagnostics formatting takes 0.481 to 2.449 µs. |
 
 ### FoliaNPC: how many NPCs can I have?
 
-Every 2 ticks (100 ms) FoliaNPC checks which players should see each NPC. For every NPC it only looks at the
-players within that NPC's view distance (48 blocks unless you change it): the players of a world are sorted into
-32 block squares once per pass, and each NPC only reads the squares around it. The cost is therefore about
-`NPCs x players near them`, not `NPCs x all players`. The pass runs on one thread: the main thread on Paper, the
-global region thread on Folia.
+Every two ticks (100 ms), FoliaNPC checks which players should see each NPC. For every NPC it looks at players
+within that NPC's view distance (48 blocks unless changed). Players are indexed in 32-block squares once per
+pass, and each NPC reads nearby squares. With 16 players or fewer, the lookup scans all players directly.
+The pass runs on one thread: the main thread on Paper, the global region thread on Folia.
 
-Time for one pass, with players spread out in a large world (lower is better):
-
-| NPCs | 10 players online | 100 players online | 500 players online |
-|---:|---:|---:|---:|
-| 100 | 0.01 ms | 0.01 ms | 0.03 ms |
-| 1,000 | 0.08 ms | 0.07 ms | 0.2 ms |
-| 10,000 | 0.9 ms | 1.7 ms | 3.1 ms |
-
-How to judge a cell, as a share of the 100 ms between passes: under 5% is fine, 5–25% is noticeable, and over 25%
-is too slow. Every cell above is fine. Before this lookup existed, 10,000 NPCs with 500 players took 47.8 ms.
-
-**The worst case is a crowd.** When every player is close to every NPC, each NPC really does have to look at every
-player, and nothing can be skipped. The same table for players packed into a small 400 block world:
+Time for one steady-state pass with players spread over a 4,000-block-wide world:
 
 | NPCs | 10 players online | 100 players online | 500 players online |
 |---:|---:|---:|---:|
-| 100 | 0.01 ms | 0.04 ms | 0.2 ms |
-| 1,000 | 0.09 ms | 0.4 ms | 1.6 ms |
-| 10,000 | 1.0 ms | 4.7 ms (noisy) | 19.9 ms (noisy, noticeable) |
+| 100 | 0.029 ms | 0.014 ms | 0.056 ms |
+| 1,000 | 0.296 ms | 0.150 ms | 0.385 ms |
+| 10,000 | 4.956 ms | 3.768 ms | 6.839 ms |
 
-- **Moving players cost a little more.** With a tenth of the players moving each pass, 10,000 NPCs with 500 players
-  takes 3.4 ms spread out and 27.9 ms crowded.
-- **Few players costs the same as before.** With 16 players or fewer in a world the library just checks all of
-  them, which is cheaper than sorting them.
+The same cases with players crowded into a 400-block-wide world:
 
-Other FoliaNPC work, for comparison:
+| NPCs | 10 players online | 100 players online | 500 players online |
+|---:|---:|---:|---:|
+| 100 | 0.029 ms | 0.079 ms | 0.348 ms |
+| 1,000 | 0.346 ms | 0.747 ms | 3.417 ms |
+| 10,000 | 5.859 ms | 12.306 ms | 48.059 ms |
+
+The largest crowded case uses about 48% of the 100 ms between passes and takes about 48 ms on the executing
+thread. It leaves little of a 50 ms tick budget for other work. Several 10,000-NPC cases have substantial
+error margins; consult the full report before sizing a server around one average.
+
+With a tenth of players moving each pass, the 10,000-NPC, 500-player cases measure
+5.149 ms spread out and
+44.059 ms crowded.
+This run does not establish that movement is cheaper; the steady and moving cases are separate measurements.
+
+Other FoliaNPC work:
 
 | What | Time |
 |---|---:|
-| Find a walking route, 16 blocks | 0.04 ms |
-| Find a walking route, 32 blocks | 0.2 ms |
-| Find a walking route, 64 blocks | 0.9–1.2 ms |
-| Give up on a route that cannot be found | 2.3–3.1 ms (capped by the search limit) |
-| Save one NPC to a plain map | 0.55 µs |
-| Load one NPC from a plain map | 0.81 µs |
+| Find a walking route, 16 blocks | 0.031 to 0.045 ms |
+| Find a walking route, 32 blocks | 0.152 to 0.225 ms |
+| Find a walking route, 64 blocks | 0.566 to 0.670 ms |
+| Give up on an unreachable route | 1.490 to 2.189 ms |
+| Save one NPC to a plain map | 0.350 µs |
+| Load one NPC from a plain map | 1.651 µs |
 
-Saving all 10,000 NPCs takes about 5.5 ms and loading them about 8 ms. Route times count only the search;
-reading blocks from the real world is extra.
+Route ranges cover the cases with 0% and 20% obstacles and count only the search. Reading blocks from the real
+world is extra. Serialization figures cover conversion to and from a map, without file or database I/O.
 
 ### FoliaBoard: scoreboards
 
 | What you do | Time |
 |---|---:|
-| Set a sidebar line to the text it already has (nothing is sent) | 0.12–0.26 µs |
-| Change one sidebar line | 0.14–0.27 µs |
-| Replace all lines of a 15 line sidebar | 0.44 µs |
-| Fill in `%player%`, `%ping%`, `%health%`, `%level%` in a line | 0.71 µs |
-| Fill in one custom placeholder | 0.23 µs |
-| Turn `<gray>Online: <green>128` into formatted text | 4.9 µs |
-| Turn a gradient title into formatted text | 8.6 µs |
-| Use text the library has already converted (cache hit) | 0.002 µs |
+| Set a sidebar line to the text it already has | 0.080 to 0.178 µs |
+| Change one sidebar line | 0.094 to 0.187 µs |
+| Replace all lines of a 15-line sidebar | 0.294 µs |
+| Fill in `%player%`, `%ping%`, `%health%`, `%level%` in a line | 0.442 µs |
+| Fill in one custom placeholder | 0.137 to 0.172 µs |
+| Turn `<gray>Online: <green>128` into formatted text | 3.545 µs |
+| Turn a gradient title into formatted text | 6.640 µs |
+| Use text the library has already converted | 4.8 ns |
 
-The packet that tells the player about a change is not counted here. As a worked example, 100 players each seeing
-15 lines that are refreshed every second, even if every line were converted from scratch (about 6 µs), is roughly
-9 ms of work per second, which is under 1% of one CPU core.
+Sidebar ranges cover five-line and fifteen-line sidebars. Packet construction and transmission are excluded.
+Managed displays and nametag compositions do not yet have dedicated cases in this benchmark suite.
 
 ### FoliaGUI: menus
 
 | What you do | Time |
 |---|---:|
-| Redraw a six-row menu when nothing has changed | 0.2 µs |
-| Change one item and redraw | 7 µs |
-| Change all 54 slots and redraw | 0.37 ms |
-| Turn a page (100, 1,000 or 10,000 entries) | 0.3–0.45 ms |
-| Create a plain item | 0.6 µs |
-| Convert a menu title with colour codes | 0.4 µs |
-| Convert a gradient title | about 8 µs (noisy) |
+| Update a six-row menu when nothing has changed | 0.331 ms |
+| Change one item and update | 0.364 ms |
+| Change all 54 slots and update | 0.422 ms |
+| Jump to the next page (100, 1,000 or 10,000 entries) | 0.354 to 0.456 ms |
+| Step forward or wrap to the first page | 0.367 to 0.523 ms |
+| Create a plain item | 0.415 µs |
+| Create an item with a name and lore | 12.935 µs |
+| Create an item with a name, lore and identity | 21.500 µs |
+| Convert a menu title with colour codes | 0.185 µs |
+| Convert a gradient title | 4.517 µs |
 
-Redrawing a menu costs more the more items changed, not the menu's size. Turning a page costs about the same
-whether the menu holds a hundred entries or ten thousand (the small differences are within the measurement noise).
-Creating an item with a name and lore is slower, in the tens of microseconds, but that measurement was unstable
-in this run, so treat it as a rough figure. These menu figures were measured against a simulated server, so a real
-server will be somewhat slower.
+These figures use MockBukkit and include the simulated inventory work. In this run, unchanged and one-slot
+updates remain close to a full update in cost; the measurements do not support treating them as negligible.
+Page timings vary with the case and entry count; the full report lists each case and its error margin.
 
 ### folia-commons
 
 | What | Time |
 |---|---:|
-| Convert `&a` style colour codes to the modern format | 0.01–0.26 µs |
-| Read a Minecraft version string | 0.54 µs |
-| Build and print a diagnostics report | 0.5–2.2 µs |
-
-### The same benchmarks on a desktop PC
-
-The same quick run on a Windows desktop (16 logical CPUs, JDK 25), next to the GitHub runner. Full report:
-[`windows-16cpu-quick.md`](benchmarks/results/windows-16cpu-quick.md). Both runs were made **before** FoliaNPC started
-looking only at nearby players, so the NPC rows show the old, slower behaviour on both machines.
-
-| What | GitHub runner (4 CPUs) | Desktop PC (16 CPUs) |
-|---|---:|---:|
-| NPC pass, 1,000 NPCs, 100 players (old lookup) | 0.9 ms | 0.74 ms |
-| NPC pass, 10,000 NPCs, 100 players (old lookup) | 9.9 ms | 7.7 ms |
-| NPC pass, 10,000 NPCs, 500 players (old lookup) | 47.8 ms | 40.9 ms |
-| Walking route, 64 blocks | 0.9–1.2 ms | 0.75–0.99 ms |
-| Change one sidebar line (15 lines) | 0.14–0.27 µs | 0.27 µs |
-| Turn a GUI page | 0.3–0.45 ms | 0.24–0.33 ms |
-
-The two machines agree to within about 20%, so the conclusions do not depend on the hardware. More CPU cores do
-not help here, because one pass runs on one thread.
+| Convert plain, `&a` or hex-colour text to the modern format | 0.006 to 0.178 µs |
+| Strip legacy colour codes | 0.085 µs |
+| Read a Minecraft version string | 0.104 µs |
+| Check an already-parsed Minecraft version | 0.575 ns |
+| Build and print diagnostics (10 or 50 features) | 0.481 to 2.449 µs |
 
 ### What these numbers do not cover
 
-- **Sending packets.** Real server work for building and sending packets is not included.
-- **Many threads at once.** Folia runs regions on separate threads. These figures show the work done by one thread.
-- **Your hardware.** A faster machine gives smaller numbers. Compare two runs on the *same* machine.
-- **Precision.** This was a short run, so single figures can be off by 10–30%. The sizes and the trends, such as cost
-  growing with NPCs times players, are what to rely on. A longer run will replace these numbers.
+- **Sending packets.** Real server work for building and sending packets is excluded.
+- **Many threads at once.** These measurements show work done by one thread, without measuring region contention.
+- **Display and nametag rendering.** Those APIs have no dedicated benchmark cases in this suite.
+- **Your hardware.** Compare repeated runs on the same configured machine before claiming a speedup or regression.
+- **Exact predictions.** Tables show rounded averages. The full report includes 99.9% confidence intervals,
+  including substantial uncertainty in some NPC and text-conversion cases.
 
 ### Run them yourself
 
@@ -235,8 +218,9 @@ benchmarks/scripts/run.sh quick      # a few minutes
 benchmarks/scripts/run.sh            # the full run, about half an hour
 ```
 
-Or use the **Benchmarks** workflow in the repository's Actions tab. The full result files, with every case and its
-error margin, are in [`benchmarks/results/`](benchmarks/results/).
+Or use the **Benchmarks** workflow in the repository's Actions tab with mode `full`. It runs on Namespace profile
+`namespace-profile-libs` and uploads the raw JSON and report. Every case and its error margin is published in
+[`benchmarks/results/`](benchmarks/results/).
 
 ## Building
 

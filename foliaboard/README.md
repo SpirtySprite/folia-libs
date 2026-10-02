@@ -1,5 +1,73 @@
 # FoliaBoard
 
+## Managed text and item displays
+
+`displays()` is an experimental API for virtual TextDisplay and ItemDisplay entities. It creates no
+world entities and never calls `addPassenger` on a Bukkit player. Attached displays are passengers
+on each viewer's client, so their movement follows the player's client movement without moving
+real passenger entities between Folia regions.
+
+```java
+var nametag = board.displays().nametag(player, Component.text("Player name"));
+nametag.attach(player, 0.25);
+nametag.textStyle(TextDisplayStyle.defaults());
+nametag.style(DisplayStyle.defaults().transformed(
+        DisplayTransform.identity().scaled(0.8f, 0.8f, 0.8f)));
+nametag.hide(specificViewer.getUniqueId());
+nametag.refresh();
+
+var item = board.displays().item(player, 0.8, new ItemStack(Material.DIAMOND));
+item.itemTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+
+var fixedText = board.displays().text(location, Component.text("Multiline\nText"));
+fixedText.textFor(viewer -> Component.text(viewer.getName()));
+fixedText.close();
+```
+
+Import the display API from `net.foliaboard.api.display`. All entry points are safe from any thread.
+Locations and item inputs are copied; callers must not mutate an input while it is being copied.
+Viewer predicates and content providers run on the viewer's owning thread. They must not read
+another player's live state or perform blocking I/O. Use previously captured immutable data for
+target-specific content. Provider exceptions suppress that viewer's display and increment
+`displays().stats().providerFailures()`.
+
+The default visibility policy hides attached displays from their owner, invisible targets and
+spectators. It requires native player tracking, `viewer.canSee(target)`, the same world and a
+48-block range. Self hiding is checked before providers and again before queued packet work.
+`show(ownerUuid)`, refresh, teleport recovery and native passenger updates cannot override it.
+Only an explicit policy with `selfVisible=true` enables owner visibility. UUID exclusions survive
+viewer reconnects for the handle's lifetime. `visible(false)` suppresses everyone without deleting
+the definition. `close()` is permanent and rejects further mutations.
+
+Successful teleport events, world changes, death and respawn invalidate queued presentations.
+After a short settling period, the owner scheduler captures the actual position and pose and
+recreates accepted client displays with fresh entity IDs. Cancelled teleport events do not reset
+the display. Rapid transitions invalidate older work. The owner's current passenger attachment
+height determines the transform correction, including pose and scale changes. Native passenger
+packets retain their passenger IDs and order; the library adds only its accepted virtual IDs.
+Tracking loss destroys the virtual passengers, and tracking recovery permits recreation.
+
+Owner disconnect closes attached handles. Create a new handle for the new login session. Fixed
+displays remain registered until closed and are shown to eligible viewers after join or world
+change. Virtual displays do not keep chunks loaded or leave entities in saved worlds.
+
+Vanilla player names remain a separate scoreboard-team feature. To replace them, configure
+`board.nametags().get(player).nametagVisibility(Nametag.Visibility.NEVER).apply()` as well. The
+display service does not take ownership of another plugin's nametag team or restore its settings.
+
+Check `displays().supported()` or `diagnose()` before creation. If the packet backend cannot bind,
+creation reports an unsupported operation while the other FoliaBoard services remain usable.
+`DisplayStats` reports handles, sessions, client entities and provider/transport failures;
+`presentationStats()` includes the `DISPLAY` surface. Rendering and cleanup are asynchronous.
+Other plugins that rewrite or cancel entity packets can affect client presentation; FoliaBoard
+cannot guarantee visibility against a competing packet implementation or a modified client.
+
+Text styles expose line width, ARGB background, unsigned opacity, shadow, see-through, default
+background and alignment. Shared styles expose billboard, translation, quaternion rotations,
+scale, lighting, interpolation, shadow, culling dimensions and glow. Item displays support every
+Minecraft item rendering context. The API targets the repository's existing 1.20.6 to 1.21.11
+range and adds no dependencies.
+
 A **Folia-native, packet-level scoreboard API** for Paper & Folia. It removes the single hardest part
 of scoreboards on Folia — knowing *which thread* may touch a player's board and not racing when they
 move between regions — and gives you a fluent, MiniMessage-first API where **every call is safe from

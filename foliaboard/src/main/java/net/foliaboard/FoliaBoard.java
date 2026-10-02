@@ -1,6 +1,8 @@
 package net.foliaboard;
 
 import net.foliaboard.api.BoardBuilder;
+import net.foliaboard.api.display.Displays;
+import net.foliaboard.internal.display.DisplayService;
 import net.foliaboard.api.Boards;
 import net.foliaboard.api.BossBarBuilder;
 import net.foliaboard.api.BossBars;
@@ -62,6 +64,7 @@ public final class FoliaBoard {
     private final BossBarService bossBars;
     private final NametagService nametags;
     private final ObjectiveService objectives;
+    private final DisplayService displays;
     private final BoardLifecycle lifecycle;
     private final FoliaBoardListener listener;
 
@@ -76,7 +79,8 @@ public final class FoliaBoard {
         this.bossBars = new BossBarService(runtime);
         this.nametags = new NametagService(runtime);
         this.objectives = new ObjectiveService(runtime);
-        this.lifecycle = new BoardLifecycle(runtime, boards, tabs, bossBars, nametags, objectives);
+        this.displays = new DisplayService(runtime);
+        this.lifecycle = new BoardLifecycle(runtime, boards, tabs, bossBars, nametags, objectives, displays);
         this.listener = new FoliaBoardListener(lifecycle, plugin, this::close);
     }
 
@@ -137,6 +141,12 @@ public final class FoliaBoard {
         return objectives;
     }
 
+    /** Returns managed text and item displays, including client-only passenger nametags. Safe from any thread. */
+    @ApiStatus.Experimental
+    public @NotNull Displays displays() {
+        return displays;
+    }
+
     public @NotNull FoliaBoardStats stats() {
         return new FoliaBoardStats(runtime.metrics().totalPackets(), runtime.metrics().refreshCount(),
                 boards.count(), nametags.active());
@@ -161,6 +171,8 @@ public final class FoliaBoard {
                 .section("Features")
                 .ok("Sidebars")
                 .ok("Nametags")
+                .feature("Text, item and passenger displays", displays.supported(),
+                        "the display packet backend could not initialize; other services remain available")
                 .ok("Boss bars")
                 .ok("Tab list header, footer and names")
                 .feature("Tab list ordering", tabs.orderSupported(),
@@ -170,6 +182,10 @@ public final class FoliaBoard {
                 .section("Runtime")
                 .info("Sidebars", String.valueOf(stats.activeSidebars()))
                 .info("Nametags", String.valueOf(stats.activeNametags()))
+                .info("Display handles", String.valueOf(displays.stats().handles()))
+                .info("Display client entities", String.valueOf(displays.stats().clientEntities()))
+                .info("Display transport failures", String.valueOf(displays.stats().transportFailures()))
+                .info("Display provider failures", String.valueOf(displays.stats().providerFailures()))
                 .info("Packets sent", String.valueOf(stats.totalPackets()))
                 .info("Provider refreshes", String.valueOf(stats.providerRefreshes()))
                 .info("Placeholder failures", String.valueOf(runtime.placeholders().failures()))

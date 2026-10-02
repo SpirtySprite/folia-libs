@@ -176,7 +176,7 @@ public final class Bot {
                     UUID ownUuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + loginName).getBytes(StandardCharsets.UTF_8));
                     if (text.equals("BoardNeverSelf") || text.equals("BoardOtherOwner:" + ownUuid)) boardSelfHidden = false;
                     if (text.equals("BoardFixedText") || text.equals("BoardPassengerVisible") || text.equals("BoardPeerPassenger")
-                            || text.startsWith("BoardOtherOwner:")) {
+                            || text.startsWith("BoardComposition") || text.startsWith("BoardOtherOwner:")) {
                         boolean fresh = boardDisplays.add(id);
                         activeBoardDisplays.add(id);
                         if (text.equals("BoardFixedText")) {

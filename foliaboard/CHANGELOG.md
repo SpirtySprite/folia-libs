@@ -7,6 +7,10 @@ All notable changes to FoliaBoard are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Experimental coordinated text/item nametag compositions, immutable profiles and atomic layout
+  updates, owner-region sampling, independent refresh periods, priority layers, distance styling,
+  visibility fades, permanent owner-hide locks, reconnect persistence, entity attachments,
+  lifecycle diagnostics and opt-in reversible vanilla-name visibility leases.
 - Experimental managed TextDisplay and ItemDisplay APIs, with client-only passenger attachments,
   persistent owner hiding and viewer exclusions, teleport/session invalidation, rendering styles,
   viewer-specific content/styles, fluent style builders, settings snapshots, interpolated fixed

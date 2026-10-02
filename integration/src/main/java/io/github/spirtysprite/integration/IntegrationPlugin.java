@@ -348,7 +348,9 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                             if ((ticks == 400 || allClicked && ticks >= 100) && finishing.compareAndSet(false, true)) {
                                 NpcScenario.run(npc, player, scheduler).thenCompose(npcResult ->
                                         GuiScenario.run(gui, player, scheduler).thenCompose(guiResult ->
-                                                DisplayScenario.run(board, player, scheduler).thenCompose(displayResult -> {
+                                                DisplayScenario.run(board, player, scheduler)
+                                                        .thenCompose(display -> NametagCompositionScenario.run(board, player, scheduler).thenApply(composition -> display + "; " + composition))
+                                                        .thenCompose(displayResult -> {
                                                     String summary = npcResult + "; " + guiResult + "; " + displayResult;
                                                     if (!Boolean.getBoolean("it.display.two")) return done(summary);
                                                     getLogger().info("DISPLAY_TWO_VIEWER_READY");

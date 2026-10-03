@@ -107,7 +107,7 @@ final class NpcScenario {
                         } catch (RuntimeException failure) { held.completeExceptionally(failure); }
                     }, 8);
                     if (waiting.isCancelled()) held.completeExceptionally(new IllegalStateException("Follow check dispatch refused"));
-                    return held;
+                    return held.thenCompose(review -> AgentScenario.run(service, scheduler, origin).thenApply(agent -> review + "; " + agent));
                 });
                 completed.whenComplete((result, failure) -> { if (!npc.removed()) npc.remove(); });
                 return completed;

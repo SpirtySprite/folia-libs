@@ -16,6 +16,7 @@ own plugin and control it entirely from code.
 - [Creating NPCs](#creating-npcs)
 - [Cloning](#cloning)
 - [Movement](#movement)
+- [Autonomous actions](#autonomous-actions)
 - [Visibility](#visibility)
 - [Skins](#skins)
 - [Nametags](#nametags)
@@ -34,13 +35,14 @@ own plugin and control it entirely from code.
 
 The NPCs are not real entities. Nothing is added to the world, nothing is ticked by the server, and
 nothing is written to region files. Each NPC exists only as a set of packets sent to the players close
-enough to see it — the server never spawns an `Entity` object for it, there's no AI, no pathing goal,
-no chunk ticket, no persistence in the level data.
+enough to see it. The server never spawns an `Entity` object for it, creates no chunk ticket and
+stores no NPC in level data. Navigation and autonomous goals are opt-in library work, not native
+entity AI. Explicit world actions can modify real blocks and dropped items.
 
 That has three consequences worth understanding up front, because they explain almost every behavior
 described later in this document:
 
-1. **It's cheap compared to real entities, but not free.** There is no entity ticking, no AI and no chunk
+1. **It's cheap compared to real entities, but not free.** There is no native entity ticking or chunk
    ticket, so an NPC costs far less than a mob. What it does cost is a visibility check every 2 ticks: for each
    NPC the library looks at the players within its view distance (players are sorted into 32 block squares once
    per pass, so distant players are never examined). The cost follows `NPCs x players near them`: 10,000 NPCs
@@ -50,8 +52,8 @@ described later in this document:
 2. **It works cleanly on Folia.** Folia's whole model is built around real entities and players each
    being owned by exactly one region thread, and code touching one from the wrong thread throws or
    corrupts state. A library with no real entities has nothing Folia needs to protect it from — the
-   only entities anywhere in this system are the *players themselves*, and FoliaNPC already tracks
-   which thread owns each one (see [Threading](#threading)).
+   visibility and packet work run on tracked viewer owners. Opt-in autonomous actions separately
+   schedule block and dropped-item access on their owners (see [Threading](#threading)).
 3. **It has no physics.** There's no gravity, no collision resolution, no falling, no fluid pushing it
    around. Position is 100% whatever you (or `walkTo`/`navigateTo`) last set it to. Spawn an NPC over a
    hole and it will float there indefinitely; nothing will ever pull it down on its own. If you need
@@ -210,6 +212,33 @@ clearance dimensions are configurable. Zero dimensions derive clearance from cac
 and scale. If dimensions cannot bind, `diagnose()` reports the conservative fallback. Ground following adjusts the destination's landing height within the rise and drop limits;
 it does not add gravity or live collision handling after a route is installed.
 
+Gap jumps, terrain costs and block approaches are optional:
+
+```java
+NavigationOptions advanced = options.toBuilder()
+        .maxJumpGap(2)
+        .terrainCosts(Map.of(Material.SOUL_SAND, 8.0, Material.ICE, 3.0))
+        .arrivalRadius(1.5)
+        .build();
+npc.navigateTo(occupiedBlockCenter, 4.0, advanced);
+NpcPosition position = npc.positionSnapshot();
+```
+
+`maxJumpGap` permits cardinal jumps across up to three missing support blocks. Clearance is checked
+along the whole scripted arc, including its ceiling. This is packet motion, not vanilla jumping
+physics. A terrain cost adds to traversing the foot and support materials without changing the hazard
+policy. `arrivalRadius` accepts a reachable standing position near the actual target coordinates,
+so the target can be an occupied block. Zero preserves exact arrival. Every setting survives
+`toBuilder()`, and the original eight-argument options constructor retains its previous defaults.
+Search cancellation is cooperative. Geometry is conservative full-block clearance; slabs, stairs,
+swimming and climbing do not receive vanilla movement simulation. Installed routes remain snapshots
+and do not continuously track blocks changed while walking.
+
+For custom lifecycle controllers, `navigateTo(target, speed, options, mayStart)` evaluates the supplied
+nonblocking predicate inside the native NPC's movement lock. A false result returns a cancelled task
+without replacing current movement. The predicate must not acquire another controller's lock.
+`positionSnapshot()` captures world and coordinates together without taking the native movement lock.
+
 Coordinates, rotations, speed, scale, view distance and proximity radii must be finite. Equipment
 inputs and getters, saved data and packet snapshots are copied independently. A duplicate persisted
 UUID is rejected; remove the existing NPC explicitly before replacing it. A closed service rejects
@@ -237,6 +266,188 @@ checks for a changed target after `repathTicks`. Leaving `maxDistance`, changing
 unreachable route ends following; disconnect cancels it. Manual navigation, straight walking,
 teleportation, stop, removal and shutdown terminate the current behavior. Type, pose, baby state and
 scale changes supersede navigation because its captured clearance no longer describes the NPC.
+
+## Autonomous actions
+
+The experimental `net.folianpc.api.agent` API keeps NPCs packet-based. Each controller combines a
+managed inventory, developer-provided actions and recipes, world observations and a resource goal.
+Nothing starts automatically. `FoliaNpc.agent(npc)` creates or returns a managed controller with 36
+stack slots, closes it when its NPC is removed and shuts it down with the library. For a custom
+capacity or planning executor, construct `NpcAgent` with `AgentInventory`, `Scheduler` and an
+`Executor`, and close that controller yourself. A closed managed controller can be recreated with a
+fresh inventory by calling the factory again.
+
+This example discovers logs in loaded chunks, approaches an observed log, mines it, then crafts
+planks until the requested inventory count exists:
+
+```java
+Scheduler scheduler = Scheduler.forPlugin(plugin);
+NpcAgent agent = npcService.agent(npc);
+World world = start.getWorld();
+
+agent.permission(interaction -> yourRules.allow(interaction));
+AgentRecipe planks = new AgentRecipe("planks", Map.of(Material.OAK_LOG, 1),
+        new ItemStack(Material.OAK_PLANKS, 4), 1);
+agent.operator(planks.operator(1.0, AgentActions.craft(planks)));
+agent.perception(() -> {
+    NpcPosition position = npc.positionSnapshot();
+    if (!world.getName().equals(position.world())) {
+        return CompletableFuture.completedFuture(List.of());
+    }
+    Location center = new Location(world, position.x(), position.y(), position.z());
+    return AgentPerception.blocks(scheduler, center, 12, 8, Set.of(Material.OAK_LOG), 16)
+            .thenApply(blocks -> blocks.stream().map(block -> {
+                Location target = block.center(world);
+                String name = "log:" + block.x() + ":" + block.y() + ":" + block.z();
+                return AgentActions.gather(name, new ItemStack(Material.OAK_LOG), 2.0,
+                        AgentActions.approachBlock(target,
+                                AgentActions.mine(target, block.material(), new ItemStack(Material.AIR), 10)));
+            }).toList());
+});
+
+AgentTask task = agent.pursue(AgentGoal.obtain(Material.OAK_PLANKS, 16));
+task.result().thenAccept(result -> plugin.getLogger().info(result.status().name()));
+```
+
+Authorization defaults to denial for all world interactions. Install your own nonblocking rule
+before allowing mining, pickup, placement or station access. The callback runs on the target owner
+and receives a defensive `AgentInteraction` location, kind and material. It does not grant player
+permissions or fire player protection events. A callback that accesses another region must arrange
+that work separately; it cannot block the current owner.
+
+### Planning and observation
+
+`AgentPlanner.plan` is also available independently for pure fact snapshots. Operators declare
+minimum facts, signed changes, a positive cost and an action. The bounded search selects a
+minimum-cost plan when it returns `FOUND`; it reports `BUDGET_EXHAUSTED` if its limits prevent that
+guarantee. It rejects negative facts, count overflow, more than 512 distinct fact keys and oversized
+operator sets. Backward dependency filtering excludes unrelated actions while retaining prerequisites and incidental
+effects. A relaxed dependency check rejects missing production chains before exploring resource cycles. The planner never executes actions or accesses the world.
+
+A controller executes one selected action, observes actual inventory and custom facts, and replans.
+Predicted yields are planning estimates, not inventory credits. Returning `false` excludes that named
+action for the current goal and tries alternatives. Failure limits, action limits and deadlines bound
+unproductive loops. Exceptions finish with `FAILED` and retain the cause. Perception refreshes before
+every planning pass; changing static operators takes effect at the next pass.
+
+`AgentPerception.blocks` captures only loaded chunks on their owners, scans immutable snapshots
+asynchronously and returns nearest `ObservedBlock` records. It never loads or generates chunks.
+Limits are a horizontal and vertical radius of 64, 64 accepted materials and 1024 returned blocks.
+Observations carry the world UUID and exact block coordinates. `center(world)` rejects a different
+world; an observation can be stale, so native actions recheck their targets at execution.
+
+`agent.facts` supplies immutable custom facts on the planning executor. It must not read live game
+objects. Capture workstation state or other world facts through owner-scheduled perception and
+publish that snapshot to the fact supplier. Inventory uses material-name counts plus reserved
+`plain:MATERIAL` counts for stacks without custom metadata. Custom facts cannot replace either
+inventory namespace. Recipes use plain counts so named, enchanted or customized items are preserved.
+
+```java
+AgentOptions defaults = AgentOptions.defaults();
+AgentOptions limits = new AgentOptions(8000, 64, 128, 8, 1200,
+        4.0, 3.0, defaults.navigation().toBuilder().maxJumpGap(1).build());
+AgentTask travelAndWork = agent.pursue(new AgentGoal(Map.of("work-complete", 1L)), limits);
+Optional<AgentPlan> latest = travelAndWork.plan();
+int executed = travelAndWork.executedActions();
+travelAndWork.cancel();
+```
+
+### Inventory and production
+
+`AgentInventory` copies inputs and snapshots, merges similar stacks up to their maximum size and
+rejects additions that do not fit. `exchange` consumes plain material ingredients and installs all
+outputs together. `exchangeExact` matches complete stack metadata. Insufficient ingredients or
+space leave inventory unchanged. `resources()` includes both total and plain counts.
+
+```java
+AgentInventory inventory = agent.inventory();
+inventory.add(List.of(new ItemStack(Material.COAL, 8)));
+List<ItemStack> snapshot = inventory.contents();
+boolean exchanged = inventory.exchange(Map.of(Material.OAK_LOG, 1),
+        List.of(new ItemStack(Material.OAK_PLANKS, 4)));
+boolean removed = inventory.remove(Map.of(Material.COBBLESTONE, 1));
+```
+
+Recipes are explicit production rules chosen by the developer. The API does not install vanilla
+recipe catalogs, unlock recipes, award XP or perform player crafting events. `craft(recipe)` uses
+only managed inventory. `craftAt(table, recipe)` additionally requires an unchanged crafting table
+within reach and authorization before and after processing. Smelting requires an unchanged furnace,
+blast furnace or smoker; include fuel in the ingredients and choose the duration. It processes
+managed inventory beside that station and does not use the real furnace's slots or burn state.
+
+```java
+AgentRecipe iron = new AgentRecipe("iron", Map.of(Material.RAW_IRON, 1, Material.COAL, 1),
+        new ItemStack(Material.IRON_INGOT), 200);
+agent.operator(iron.operator(4.0,
+        AgentActions.approachBlock(furnaceLocation,
+                AgentActions.smelt(furnaceLocation, Material.FURNACE, iron))));
+
+AgentRecipe tools = new AgentRecipe("pickaxe", Map.of(Material.COBBLESTONE, 3, Material.STICK, 2),
+        new ItemStack(Material.STONE_PICKAXE), 20);
+agent.operator(tools.operator(3.0,
+        AgentActions.approachBlock(tableLocation, AgentActions.craftAt(tableLocation, tools))));
+```
+
+`mine` checks expected material, loaded chunk, reach, authorization, hardness, tool ownership and
+inventory space. Containers are rejected to preserve their contents. Native block drops go directly
+to inventory; the owned tool takes one durability damage per completed action and disappears when
+broken. Unbreakable metadata is honored. Enchantment-specific wear, vanilla mining speed, line of sight and player break events are
+not simulated. If using a tool, obtain its current inventory snapshot while binding each mining
+action in perception, because damage changes its metadata after use.
+
+`pickup(item)` schedules against the dropped item's current entity owner and collects an entire
+stack if it remains valid, within reach, permitted and fits. `approachItem(item)` captures the item's current position on its owner, approaches it and then rechecks pickup eligibility. Native player pickup delays, ownership
+restrictions and pickup events are not applied automatically; enforce your rules in authorization.
+`place(location, material)` consumes one plain block item and requires unchanged air, reach and
+permission. Developer rules control placement suitability and protection; player placement events
+are not invoked.
+
+```java
+AgentOperator collect = AgentActions.gather("collect-iron", new ItemStack(Material.RAW_IRON),
+        2.0, AgentActions.approachItem(droppedItem));
+agent.operator(collect);
+
+agent.operator(new AgentOperator("place-furnace", Map.of(AgentInventory.plainKey(Material.FURNACE), 1L),
+        Map.of("FURNACE", -1L, AgentInventory.plainKey(Material.FURNACE), -1L, "station-ready", 1L),
+        2.0, AgentActions.approachBlock(furnaceLocation, AgentActions.place(furnaceLocation, Material.FURNACE))));
+```
+
+When planning production before a station exists, add the station fact to the production operator's
+requirements and observe that fact from the world. A placement estimate alone must not become a
+permanent fact if the actual station disappears.
+
+### Custom actions and lifecycle
+
+`AgentAction` returns a nonblocking completion stage. `AgentContext` supplies inventory, scheduler,
+options, `navigate`, `navigateNear`, tick delays, authorization and a goal-generation commit gate.
+Custom live reads and writes must be scheduled to their owner; `commit` establishes lifecycle
+validity, not region ownership. Keep commits short and use the gate immediately before a mutation.
+
+```java
+agent.operator(new AgentOperator("custom-work", Map.of("ready", 1L), Map.of("work-complete", 1L),
+        1.0, context -> context.navigateNear(target, 1.5).thenCompose(arrived -> {
+            if (!arrived) return CompletableFuture.completedFuture(false);
+            return context.scheduler().callForLocation(target, () -> context.commit(() -> {
+                if (!yourRules.allowWork(target)) return false;
+                performOwnedWork(target);
+                publishWorkCompleteSnapshot();
+                return true;
+            }));
+        })));
+```
+
+Goal handles implement `TaskHandle` and `AutoCloseable`, so `TaskGroup.add(task)` and `task.close()`
+compose with existing movement and session cleanup.
+
+Starting a new goal supersedes the old one. Cancellation, timeout, removal and shutdown cancel tracked
+work and reject stale commits. An already admitted commit finishes before the terminal result is
+delivered, without holding the controller lock around game calls or user callbacks. Such work is not
+interrupted or rolled back. Context movement cancellation targets its own `MovementTask`, leaving
+newer replacement movement alone. Observer futures are independent: cancelling `task.result()` does
+not cancel the task. Completed resources remain in inventory; world edits already committed are not
+rolled back. External teleports or movement replacement make that action fail and allow replanning.
+`agent.close()` permanently rejects new goals on that controller. No survival loop, NPC equipment
+policy, permission policy or world modification is installed automatically.
 
 ## Visibility range
 

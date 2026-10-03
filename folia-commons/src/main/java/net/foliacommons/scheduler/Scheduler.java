@@ -189,6 +189,18 @@ public interface Scheduler {
     /** Runs {@code task} on a thread that is not tied to the world. Never touch players or blocks there. */
     boolean runAsync(@NotNull Runnable task);
 
+    /** Runs a result supplier asynchronously. Plugin-bound calls fail on owner shutdown; no callback may access live game state without rescheduling. */
+    @ApiStatus.Experimental
+    default <T> @NotNull CompletableFuture<T> callAsync(@NotNull Supplier<T> task) {
+        Objects.requireNonNull(task, "task");
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            if (!runAsync(() -> { if (!future.isDone()) complete(future, task); }))
+                future.completeExceptionally(new SchedulingException("The asynchronous call could not be scheduled"));
+        } catch (RuntimeException failure) { future.completeExceptionally(failure); }
+        return future;
+    }
+
     boolean runAsyncLater(@NotNull Runnable task, @NotNull Duration delay);
 
     boolean isFolia();

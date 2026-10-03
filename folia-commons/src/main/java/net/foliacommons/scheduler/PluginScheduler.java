@@ -170,6 +170,11 @@ final class PluginScheduler implements Scheduler {
     }
 
     @Override
+    public <T> @NotNull CompletableFuture<T> callAsync(@NotNull Supplier<T> task) {
+        return call(task, (run, retired) -> runAsync(run));
+    }
+
+    @Override
     public <T> @NotNull CompletableFuture<T> callForLocation(@NotNull Location location, @NotNull Supplier<T> task) {
         Location snapshot = locationSnapshot(location);
         return call(task, (run, retired) -> runForLocation(snapshot, run));

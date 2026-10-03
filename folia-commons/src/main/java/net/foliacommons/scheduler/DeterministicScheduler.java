@@ -228,6 +228,11 @@ public final class DeterministicScheduler implements Scheduler, AutoCloseable {
     }
 
     @Override
+    public <T> @NotNull CompletableFuture<T> callAsync(@NotNull Supplier<T> task) {
+        return call(null, task);
+    }
+
+    @Override
     public <T> @NotNull CompletableFuture<T> callGlobal(@NotNull Supplier<T> task) {
         return call(null, task);
     }

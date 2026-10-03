@@ -36,6 +36,13 @@ public interface Npc {
 
     double z();
 
+    /** Returns a coherent position snapshot safe to inspect from any thread. Native packet NPCs capture it without acquiring a movement lock. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default NpcPosition positionSnapshot() {
+        NpcData data = data();
+        return new NpcPosition(data.world(), data.x(), data.y(), data.z());
+    }
+
     Npc lookAtPlayers(boolean enabled);
 
     boolean lookAtPlayers();
@@ -244,6 +251,25 @@ public interface Npc {
     @org.jetbrains.annotations.ApiStatus.Experimental
     default MovementTask navigateTo(org.bukkit.Location target, double blocksPerSecond, NavigationOptions options) {
         throw new UnsupportedOperationException("Snapshot navigation is unavailable in this implementation");
+    }
+
+    /** Conditionally starts navigation. Native NPCs evaluate the nonblocking thread-safe gate inside their movement lock, preventing stale goal starts. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    default MovementTask navigateTo(org.bukkit.Location target, double blocksPerSecond, NavigationOptions options,
+                                    java.util.function.BooleanSupplier mayStart) {
+        java.util.Objects.requireNonNull(target, "target");
+        java.util.Objects.requireNonNull(options, "options");
+        java.util.Objects.requireNonNull(mayStart, "mayStart");
+        target.checkFinite();
+        if (!Double.isFinite(blocksPerSecond)) throw new IllegalArgumentException("Non-finite movement speed");
+        if (mayStart.getAsBoolean()) return navigateTo(target, blocksPerSecond, options);
+        return new MovementTask() {
+            private final java.util.concurrent.CompletableFuture<MovementResult> result = java.util.concurrent.CompletableFuture.completedFuture(MovementResult.of(MovementResult.Status.CANCELLED));
+            @Override public java.util.concurrent.CompletableFuture<MovementResult> route() { return result.copy(); }
+            @Override public java.util.concurrent.CompletableFuture<MovementResult> result() { return result.copy(); }
+            @Override public boolean isCancelled() { return true; }
+            @Override public void cancel() { }
+        };
     }
 
     /** Starts a copied waypoint patrol, replacing existing movement. Failure at any waypoint ends the behavior. */

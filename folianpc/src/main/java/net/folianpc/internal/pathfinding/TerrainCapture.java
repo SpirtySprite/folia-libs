@@ -21,11 +21,16 @@ public final class TerrainCapture {
 
     public CompletableFuture<AStar.WorldSampler> capture(World world, double x, double z, int radius,
                                                          NavigationOptions.TerrainPolicy policy) {
+        return capture(world, x, z, radius, policy, Map.of());
+    }
+
+    public CompletableFuture<AStar.WorldSampler> capture(World world, double x, double z, int radius,
+                                                         NavigationOptions.TerrainPolicy policy, Map<Material, Double> costs) {
         int minX = Math.floorDiv((int) Math.floor(x) - radius - 9, 16);
         int minZ = Math.floorDiv((int) Math.floor(z) - radius - 9, 16);
         int maxX = Math.floorDiv((int) Math.floor(x) + radius + 9, 16);
         int maxZ = Math.floorDiv((int) Math.floor(z) + radius + 9, 16);
-        Capture capture = new Capture(world, minX, minZ, maxX - minX + 1, maxZ - minZ + 1, policy);
+        Capture capture = new Capture(world, minX, minZ, maxX - minX + 1, maxZ - minZ + 1, policy, Map.copyOf(costs));
         for (int worker = 0; worker < 4 && !capture.result.isDone(); worker++) {
             capture.next();
         }
@@ -39,12 +44,13 @@ public final class TerrainCapture {
         final int width;
         final int count;
         final NavigationOptions.TerrainPolicy policy;
+        final Map<Material, Double> costs;
         final Map<Long, ChunkSnapshot> snapshots = new ConcurrentHashMap<>();
         final AtomicInteger next = new AtomicInteger();
         final AtomicInteger remaining;
         final CompletableFuture<AStar.WorldSampler> result = new CompletableFuture<>();
 
-        Capture(World world, int minX, int minZ, int width, int height, NavigationOptions.TerrainPolicy policy) {
+        Capture(World world, int minX, int minZ, int width, int height, NavigationOptions.TerrainPolicy policy, Map<Material, Double> costs) {
             this.world = world;
             this.minX = minX;
             this.minZ = minZ;
@@ -52,6 +58,7 @@ public final class TerrainCapture {
             count = Math.multiplyExact(width, height);
             remaining = new AtomicInteger(count);
             this.policy = policy;
+            this.costs = costs;
         }
 
         void next() {
@@ -77,7 +84,7 @@ public final class TerrainCapture {
                         snapshots.put(key(x, z), snapshot);
                     }
                     if (remaining.decrementAndGet() == 0) {
-                        result.complete(new Sample(Map.copyOf(snapshots), world.getMinHeight(), world.getMaxHeight(), policy));
+                        result.complete(new Sample(Map.copyOf(snapshots), world.getMinHeight(), world.getMaxHeight(), policy, costs));
                     } else {
                         next();
                     }
@@ -89,7 +96,12 @@ public final class TerrainCapture {
     }
 
     private record Sample(Map<Long, ChunkSnapshot> chunks, int minY, int maxY,
-                          NavigationOptions.TerrainPolicy policy) implements AStar.WorldSampler {
+                          NavigationOptions.TerrainPolicy policy, Map<Material, Double> costs) implements AStar.WorldSampler {
+        @Override public double penalty(int x, int y, int z) {
+            if (costs.isEmpty()) return 0;
+            Material ground = type(x, y - 1, z), foot = type(x, y, z);
+            return (ground == null ? 0 : costs.getOrDefault(ground, 0.0)) + (foot == null ? 0 : costs.getOrDefault(foot, 0.0));
+        }
         private Material type(int x, int y, int z) {
             ChunkSnapshot snapshot = chunks.get(key(Math.floorDiv(x, 16), Math.floorDiv(z, 16)));
             return snapshot == null || y < minY || y >= maxY ? null

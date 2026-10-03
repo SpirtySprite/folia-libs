@@ -24,6 +24,25 @@ class DeterministicSchedulerTest {
     private final Location location = new Location(world, 0, 64, 0);
 
     @Test
+    void asynchronousCallsResolveAndRetireOnClose() {
+        DeterministicScheduler scheduler = Scheduler.deterministic();
+        AtomicInteger supplied = new AtomicInteger();
+        var resolved = scheduler.callAsync(supplied::incrementAndGet);
+        scheduler.advanceTicks(1);
+        assertEquals(1, resolved.join());
+        var pending = scheduler.callAsync(supplied::incrementAndGet);
+        var cancelled = scheduler.callAsync(supplied::incrementAndGet);
+        cancelled.cancel(false);
+        scheduler.close();
+        scheduler.advanceTicks(1);
+        assertTrue(pending.isCompletedExceptionally());
+        assertTrue(cancelled.isCancelled());
+        assertTrue(scheduler.callAsync(supplied::incrementAndGet).isCompletedExceptionally());
+        assertEquals(1, supplied.get());
+        assertEquals(0, scheduler.pendingTasks());
+    }
+
+    @Test
     void throwingRetirementCallbacksDoNotLeaveOtherCallsPending() {
         try (DeterministicScheduler scheduler = Scheduler.deterministic()) {
             AtomicInteger retired = new AtomicInteger();

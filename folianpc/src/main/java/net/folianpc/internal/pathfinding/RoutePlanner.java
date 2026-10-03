@@ -7,8 +7,6 @@ import java.util.List;
 
 public final class RoutePlanner {
 
-    private static final double JUMP_ARC_HEIGHT = 0.35;
-
     private final int maxNodes;
     private final int maxRadius;
 
@@ -31,7 +29,13 @@ public final class RoutePlanner {
     public List<double[]> route(AStar.WorldSampler sampler, double fromX, double fromY, double fromZ,
                                 double toX, double toY, double toZ, net.folianpc.api.NavigationOptions options,
                                 double width, double height) {
-        if (options.groundFollowing()) {
+        return route(sampler, fromX, fromY, fromZ, toX, toY, toZ, options, width, height, () -> false);
+    }
+
+    public List<double[]> route(AStar.WorldSampler sampler, double fromX, double fromY, double fromZ,
+                                double toX, double toY, double toZ, net.folianpc.api.NavigationOptions options,
+                                double width, double height, java.util.function.BooleanSupplier cancelled) {
+        if (options.groundFollowing() && options.arrivalRadius() == 0) {
             boolean found = false;
             for (int offset = options.stepHeight(); offset >= -options.maxDrop(); offset--) {
                 double landing = Math.floor(toY) + offset;
@@ -45,30 +49,32 @@ public final class RoutePlanner {
                 return List.of();
             }
         }
-        if (!AStar.clearance(sampler, toX, toY, toZ, width, height)) {
+        if (options.arrivalRadius() == 0 && !AStar.clearance(sampler, toX, toY, toZ, width, height)) {
             return List.of();
         }
         AStar.Node start = new AStar.Node(floor(fromX), floor(fromY), floor(fromZ));
         AStar.Node goal = new AStar.Node(floor(toX), floor(toY), floor(toZ));
-        List<AStar.Node> path = AStar.find(sampler, start, goal, options, width, height);
+        final double targetX = toX, targetY = toY, targetZ = toZ;
+        List<AStar.Node> path = options.arrivalRadius() == 0
+                ? AStar.find(sampler, start, goal, options, width, height, cancelled)
+                : AStar.find(sampler, start, options, width, height, cancelled,
+                        node -> distance(node, targetX, targetY, targetZ) <= options.arrivalRadius() * options.arrivalRadius()
+                                && AStar.clearance(sampler, node.x() + 0.5, node.y(), node.z() + 0.5, width, height),
+                        node -> estimate(node, targetX, targetY, targetZ, options.arrivalRadius()));
         if (path.isEmpty()) {
             return List.of();
         }
         List<double[]> waypoints = new ArrayList<>(path.size());
         AStar.Node previous = null;
         for (AStar.Node node : path) {
-            if (previous != null && node.y() > previous.y()) {
-                waypoints.add(new double[]{previous.x() + 0.5, node.y() + JUMP_ARC_HEIGHT, previous.z() + 0.5});
-                waypoints.add(arcPeak(previous, node));
-            } else if (previous != null && node.y() < previous.y()) {
-                waypoints.add(new double[]{node.x() + 0.5, previous.y(), node.z() + 0.5});
-            }
-            waypoints.add(new double[]{node.x() + 0.5, node.y(), node.z() + 0.5});
+            if (previous != null) waypoints.addAll(MovementGeometry.transition(previous, node));
+            else waypoints.add(new double[]{node.x() + 0.5, node.y(), node.z() + 0.5});
             previous = node;
         }
-        waypoints.set(waypoints.size() - 1, new double[]{toX, toY, toZ});
+        if (options.arrivalRadius() == 0) waypoints.set(waypoints.size() - 1, new double[]{toX, toY, toZ});
         double[] last = new double[]{fromX, fromY, fromZ};
         for (double[] next : waypoints) {
+            if (cancelled.getAsBoolean()) return List.of();
             double distance = Math.max(Math.abs(next[0] - last[0]),
                     Math.max(Math.abs(next[1] - last[1]), Math.abs(next[2] - last[2])));
             int samples = Math.max(1, (int) Math.ceil(distance / 0.1));
@@ -84,13 +90,18 @@ public final class RoutePlanner {
         return waypoints;
     }
 
-    private static double[] arcPeak(AStar.Node from, AStar.Node to) {
-        double midX = (from.x() + to.x()) / 2.0 + 0.5;
-        double midZ = (from.z() + to.z()) / 2.0 + 0.5;
-        return new double[]{midX, to.y() + JUMP_ARC_HEIGHT, midZ};
-    }
-
     private static int floor(double value) {
         return (int) Math.floor(value);
+    }
+
+    private static double distance(AStar.Node node, double x, double y, double z) {
+        double dx = node.x() + 0.5 - x, dy = node.y() - y, dz = node.z() + 0.5 - z;
+        return dx*dx + dy*dy + dz*dz;
+    }
+
+    private static double estimate(AStar.Node node, double x, double y, double z, double radius) {
+        double dx = Math.abs(node.x() + 0.5 - x), dz = Math.abs(node.z() + 0.5 - z);
+        return Math.max(0, Math.max(dx, dz) + (Math.sqrt(2) - 1) * Math.min(dx, dz)
+                + Math.abs(node.y() - y) * 0.5 - 2 * radius);
     }
 }

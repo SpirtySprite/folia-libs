@@ -397,10 +397,10 @@ public final class NpcManager {
         }
         try {
             var capture = new TerrainCapture(Schedulers.scheduler(plugin)).capture(world, from.x(), from.z(),
-                    options.radius(), options.terrain());
+                    options.radius(), options.terrain(), options.terrainCosts());
             request.work.add(capture);
             var search = capture.thenApplyAsync(sampler -> planner.route(sampler, from.x(), from.y(), from.z(),
-                    destination.getX(), destination.getY(), destination.getZ(), options, dimensions[0], dimensions[1]), async);
+                    destination.getX(), destination.getY(), destination.getZ(), options, dimensions[0], dimensions[1], request::isCancelled), async);
             request.work.add(search);
             search.whenComplete((route, failure) -> {
                 if (failure != null) {

@@ -10,6 +10,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
+import java.util.function.ToDoubleFunction;
 
 public final class AStar {
 
@@ -17,6 +20,7 @@ public final class AStar {
         boolean solid(int x, int y, int z);
         default boolean passable(int x, int y, int z) { return !solid(x, y, z); }
         default boolean ground(int x, int y, int z) { return solid(x, y, z); }
+        default double penalty(int x, int y, int z) { return 0; }
     }
 
     public record Node(int x, int y, int z) {
@@ -40,6 +44,18 @@ public final class AStar {
 
     public static List<Node> find(WorldSampler world, Node start, Node goal,
                                   net.folianpc.api.NavigationOptions options, double width, double height) {
+        return find(world, start, goal, options, width, height, () -> false);
+    }
+
+    public static List<Node> find(WorldSampler world, Node start, Node goal,
+                                  net.folianpc.api.NavigationOptions options, double width, double height, BooleanSupplier cancelled) {
+        return find(world, start, options, width, height, cancelled,
+                node -> reached(node, goal, options.arrivalRadius()), node -> estimate(node, goal, options.arrivalRadius()));
+    }
+
+    public static List<Node> find(WorldSampler world, Node start, net.folianpc.api.NavigationOptions options,
+                                  double width, double height, BooleanSupplier cancelled,
+                                  Predicate<Node> goal, ToDoubleFunction<Node> heuristic) {
         int maxNodes = options.maxNodes();
         int maxRadius = options.radius();
         Map<Node, Node> cameFrom = new HashMap<>();
@@ -48,17 +64,19 @@ public final class AStar {
         PriorityQueue<Open> open = new PriorityQueue<>(Comparator.comparingDouble(Open::priority));
 
         gScore.put(start, 0.0);
-        open.add(new Open(start, heuristic(start, goal)));
+        open.add(new Open(start, heuristic.applyAsDouble(start)));
         int explored = 0;
 
-        while (!open.isEmpty() && explored < maxNodes) {
+        while (!open.isEmpty()) {
+            if (cancelled.getAsBoolean()) return List.of();
             Node current = open.poll().node();
             if (!closed.add(current)) {
                 continue;
             }
-            if (current.equals(goal)) {
+            if (goal.test(current)) {
                 return reconstruct(cameFrom, current);
             }
+            if (explored >= maxNodes) return List.of();
             explored++;
 
             for (Node neighbor : neighbors(world, current, options, width, height)) {
@@ -67,11 +85,13 @@ public final class AStar {
                         || Math.abs(neighbor.z() - start.z()) > maxRadius) {
                     continue;
                 }
-                double tentative = score(gScore, current) + stepCost(current, neighbor);
+                double penalty = world.penalty(neighbor.x(), neighbor.y(), neighbor.z());
+                if (!Double.isFinite(penalty) || penalty < 0) throw new IllegalArgumentException("Invalid terrain cost");
+                double tentative = score(gScore, current) + stepCost(current, neighbor) + penalty;
                 if (tentative < score(gScore, neighbor)) {
                     cameFrom.put(neighbor, current);
                     gScore.put(neighbor, tentative);
-                    open.add(new Open(neighbor, tentative + heuristic(neighbor, goal)));
+                    open.add(new Open(neighbor, tentative + heuristic.applyAsDouble(neighbor)));
                 }
             }
         }
@@ -93,24 +113,37 @@ public final class AStar {
         return new ArrayList<>(path);
     }
 
-    private static double heuristic(Node a, Node b) {
-        double dx = a.x() - b.x();
-        double dy = a.y() - b.y();
-        double dz = a.z() - b.z();
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    private static double estimate(Node a, Node b, double radius) {
+        double dx = Math.abs((double) a.x() - b.x());
+        double dz = Math.abs((double) a.z() - b.z());
+        return Math.max(0, Math.max(dx, dz) + (Math.sqrt(2) - 1) * Math.min(dx, dz)
+                + 0.5 * Math.abs((double) a.y() - b.y()) - 2 * radius);
+    }
+
+    private static boolean reached(Node a, Node b, double radius) {
+        double dx = (double) a.x() - b.x(), dy = (double) a.y() - b.y(), dz = (double) a.z() - b.z();
+        return dx*dx + dy*dy + dz*dz <= radius*radius;
     }
 
     private static double stepCost(Node from, Node to) {
-        double horizontal = (from.x() != to.x() && from.z() != to.z()) ? 1.4142 : 1.0;
+        double dx = (double) from.x() - to.x(), dz = (double) from.z() - to.z();
+        double horizontal = Math.sqrt(dx*dx + dz*dz);
         return horizontal + Math.abs(to.y() - from.y()) * 0.5;
     }
 
     private static List<Node> neighbors(WorldSampler world, Node from, net.folianpc.api.NavigationOptions options, double width, double height) {
         List<Node> result = new ArrayList<>(8);
         for (int[] dir : DIRECTIONS) {
-            Node landing = landingSpot(world, from, dir[0], dir[1], options, width, height);
-            if (landing != null) {
-                result.add(landing);
+            for (int gap = 0; gap <= (dir[0] != 0 && dir[1] != 0 ? 0 : options.maxJumpGap()); gap++) {
+                if (gap > 0) {
+                    boolean unsupported = false;
+                    for (int step = 1; step <= gap; step++) {
+                        if (!world.ground(from.x() + dir[0] * step, from.y() - 1, from.z() + dir[1] * step)) unsupported = true;
+                    }
+                    if (!unsupported) continue;
+                }
+                Node landing = landingSpot(world, from, dir[0] * (gap + 1), dir[1] * (gap + 1), options, width, height);
+                if (landing != null) result.add(landing);
             }
         }
         return result;
@@ -123,7 +156,8 @@ public final class AStar {
         }
         for (int dy = options.stepHeight(); dy >= -options.maxDrop(); dy--) {
             Node candidate = new Node(from.x() + dx, from.y() + dy, from.z() + dz);
-            if (clearance(world, candidate.x() + 0.5, candidate.y(), candidate.z() + 0.5, width, height)) {
+            if (clearance(world, candidate.x() + 0.5, candidate.y(), candidate.z() + 0.5, width, height)
+                    && MovementGeometry.clear(world, from, candidate, width, height)) {
                 return candidate;
             }
         }

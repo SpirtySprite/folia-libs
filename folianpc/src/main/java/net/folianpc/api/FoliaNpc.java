@@ -46,6 +46,15 @@ public final class FoliaNpc {
     private Schedulers.Handle timer;
     private Listener listener;
     private volatile boolean closed;
+    private final java.util.Map<UUID, net.folianpc.api.agent.NpcAgent> agents = new java.util.HashMap<>();
+    private final java.util.concurrent.ExecutorService planner = new java.util.concurrent.ThreadPoolExecutor(
+            Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors())),
+            Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors())), 0,
+            java.util.concurrent.TimeUnit.MILLISECONDS, new java.util.concurrent.ArrayBlockingQueue<>(128), runnable -> {
+                Thread thread = new Thread(runnable, "folianpc-planner");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private FoliaNpc(Plugin plugin, NmsProtocolBackend backend, PlayerTracker tracker, NpcManager manager) {
         this.plugin = plugin;
@@ -126,7 +135,7 @@ public final class FoliaNpc {
             }
         };
         Bukkit.getPluginManager().registerEvents(listener, plugin);
-        timer = Schedulers.globalTimer(plugin, manager::tick, 2, 2);
+        timer = Schedulers.globalTimer(plugin, () -> { manager.tick(); retireAgents(); }, 2, 2);
     }
 
     public NpcBuilder builder() {
@@ -336,15 +345,44 @@ public final class FoliaNpc {
                 backend.packetsSent(), manager.lastTickMillis());
     }
 
+    /** Returns an opt-in managed autonomous controller for an owned live NPC. Closing the library closes every controller; world actions require explicit permission. */
+    @org.jetbrains.annotations.ApiStatus.Experimental
+    public synchronized net.folianpc.api.agent.NpcAgent agent(Npc npc) {
+        java.util.Objects.requireNonNull(npc, "npc");
+        if (closed || npc.removed() || manager.get(npc.id()) != npc) throw new IllegalStateException("NPC does not belong to this open library");
+        net.folianpc.api.agent.NpcAgent existing = agents.get(npc.id());
+        if (existing != null && !existing.isClosed()) return existing;
+        var created = new net.folianpc.api.agent.NpcAgent(npc, new net.folianpc.api.agent.AgentInventory(36),
+                net.foliacommons.scheduler.Scheduler.forPlugin(plugin), planner);
+        agents.put(npc.id(), created);
+        return created;
+    }
+
+    private void retireAgents() {
+        java.util.List<net.folianpc.api.agent.NpcAgent> retired = new java.util.ArrayList<>();
+        synchronized (this) {
+            agents.entrySet().removeIf(entry -> {
+                Npc npc = manager.get(entry.getKey());
+                if (npc == null || npc.removed() || entry.getValue().isClosed()) { retired.add(entry.getValue()); return true; }
+                return false;
+            });
+        }
+        retired.forEach(net.folianpc.api.agent.NpcAgent::close);
+    }
+
     public String diag() {
         return "npcs=" + manager.count() + " trackedPlayers=" + tracker.size();
     }
 
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void close() {
+        java.util.List<net.folianpc.api.agent.NpcAgent> closing;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            closing = java.util.List.copyOf(agents.values());
+            agents.clear();
         }
-        closed = true;
+        closing.forEach(net.folianpc.api.agent.NpcAgent::close);
         if (timer != null) {
             timer.cancel();
         }
@@ -357,5 +395,6 @@ public final class FoliaNpc {
         }
         skins.close();
         async.shutdown();
+        planner.shutdownNow();
     }
 }

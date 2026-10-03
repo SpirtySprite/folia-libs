@@ -6,6 +6,16 @@ All notable changes to FoliaNPC are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Experimental autonomous packet-NPC controllers with bounded minimum-cost goal planning, managed inventories, dynamic world perception and custom actions.
+- Region-owned mining, pickup, block placement, explicit crafting and station-bound smelting, with authorization and stale-goal commit gates.
+- Opt-in collision-checked gap jumps, terrain penalties, occupied-block approach radii and cooperative route cancellation.
+- Coherent position snapshots and conditional movement starts for lifecycle-safe action composition.
+
+### Fixed
+- Search edges now reject obstructed movement arcs before selecting a route, allowing reachable detours.
+- Navigation uses a heuristic consistent with its horizontal and vertical edge costs.
+
 ## [1.4.1] - 2026-10-01
 
 ### Fixed

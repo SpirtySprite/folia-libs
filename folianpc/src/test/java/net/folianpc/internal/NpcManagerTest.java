@@ -84,6 +84,26 @@ class NpcManagerTest {
     }
 
     @Test
+    void rejectedConditionalNavigationPreservesNewerMovementAndCoherentPosition() {
+        NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
+        World world = mock(World.class);
+        when(world.getName()).thenReturn("world");
+        npc.walkTo(new Location(world, 8, 64, 0), 4);
+        var rejected = npc.navigateTo(new Location(world, 2, 64, 0), 4,
+                net.folianpc.api.NavigationOptions.defaults(), () -> false);
+        assertEquals(net.folianpc.api.MovementResult.Status.CANCELLED, rejected.result().join().status());
+        assertTrue(npc.moving());
+        assertEquals(new net.folianpc.api.NpcPosition("world", 0, 64, 0), npc.positionSnapshot());
+        World other = mock(World.class);
+        when(other.getName()).thenReturn("other");
+        npc.teleport(new Location(other, 3, 70, 9));
+        assertEquals(new net.folianpc.api.NpcPosition("other", 3, 70, 9), npc.positionSnapshot());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> npc.navigateTo(new Location(world, Double.NaN, 64, 0), 4,
+                        net.folianpc.api.NavigationOptions.defaults(), () -> false));
+    }
+
+    @Test
     void showsPlayerInRange() {
         NpcImpl npc = manager.create("Bob", new Position("world", 0, 64, 0, 0, 0));
         UUID id = UUID.randomUUID();

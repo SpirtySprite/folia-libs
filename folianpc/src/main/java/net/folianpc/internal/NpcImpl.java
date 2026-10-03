@@ -182,6 +182,20 @@ public final class NpcImpl implements Npc {
         return manager.navigate(this, target, speed, options);
     }
 
+    @Override
+    public synchronized MovementTask navigateTo(Location target, double speed, NavigationOptions options,
+                                                java.util.function.BooleanSupplier mayStart) {
+        java.util.Objects.requireNonNull(mayStart, "mayStart");
+        if (!mayStart.getAsBoolean()) return Npc.super.navigateTo(target, speed, options, () -> false);
+        return navigateTo(target, speed, options);
+    }
+
+    @Override
+    public net.folianpc.api.NpcPosition positionSnapshot() {
+        Position snapshot = position;
+        return new net.folianpc.api.NpcPosition(snapshot.world(), snapshot.x(), snapshot.y(), snapshot.z());
+    }
+
     synchronized MovementRequest beginMovement() {
         MovementRequest ending = movement;
         movementGeneration++;

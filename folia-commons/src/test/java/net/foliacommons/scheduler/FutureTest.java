@@ -27,6 +27,29 @@ class FutureTest {
     private final Entity entity = mock(Entity.class);
 
     @Test
+    void defaultAsyncResultsSuppressCancelledSuppliersAndReportDispatchFailures() {
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        Scheduler scheduler = new NeverScheduler() {
+            @Override public boolean runAsync(Runnable task) { queued.set(task); return true; }
+        };
+        var success = scheduler.callAsync(() -> 42);
+        queued.get().run();
+        assertEquals(42, success.join());
+        var cancelled = scheduler.callAsync(() -> { throw new AssertionError("cancelled supplier ran"); });
+        cancelled.cancel(false);
+        queued.get().run();
+        assertTrue(cancelled.isCancelled());
+        var failure = scheduler.callAsync(() -> { throw new IllegalStateException("supplier"); });
+        queued.get().run();
+        assertInstanceOf(IllegalStateException.class, assertThrows(java.util.concurrent.CompletionException.class, failure::join).getCause());
+        assertTrue(new NeverScheduler().callAsync(() -> 1).isCompletedExceptionally());
+        Scheduler throwing = new NeverScheduler() {
+            @Override public boolean runAsync(Runnable task) { throw new IllegalStateException("dispatch"); }
+        };
+        assertTrue(throwing.callAsync(() -> 1).isCompletedExceptionally());
+    }
+
+    @Test
     void defaultOneShotAdaptersSuppressCancelledCallbacks() {
         AtomicReference<Runnable> queued = new AtomicReference<>();
         Scheduler scheduler = new NeverScheduler() {

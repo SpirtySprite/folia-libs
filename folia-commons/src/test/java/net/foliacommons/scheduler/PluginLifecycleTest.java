@@ -73,6 +73,27 @@ class PluginLifecycleTest {
     }
 
     @Test
+    void queuedAsyncCallCannotStartAfterDisable() {
+        Scheduler scheduler = scheduler();
+        AsyncScheduler async = mock(AsyncScheduler.class);
+        AtomicReference<Consumer<ScheduledTask>> queued = new AtomicReference<>();
+        when(async.runNow(eq(plugin), any())).thenAnswer(invocation -> {
+            queued.set(invocation.getArgument(1));
+            return mock(ScheduledTask.class);
+        });
+        AtomicInteger ran = new AtomicInteger();
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getAsyncScheduler).thenReturn(async);
+            var future = scheduler.callAsync(ran::incrementAndGet);
+            assertFalse(future.isDone());
+            disable();
+            queued.get().accept(mock(ScheduledTask.class));
+            assertTrue(future.isCompletedExceptionally());
+            assertEquals(0, ran.get());
+        }
+    }
+
+    @Test
     void acceptedCallsAcrossSchedulerInstancesFailOnDisable() {
         Scheduler scheduler = scheduler();
         AtomicReference<Runnable> queued = new AtomicReference<>();

@@ -6,6 +6,9 @@ All notable changes to folia-commons are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Experimental asynchronous result calls with plugin shutdown and queued-supplier cancellation handling.
+
 ## [1.1.1] - 2026-10-01
 
 ### Fixed

@@ -53,6 +53,14 @@ scheduler.callForLocation(target, () -> target.getBlock().getType())
                 () -> player.sendMessage("Material: " + material), null));
 ```
 
+`callAsync` returns a result from asynchronous work with the same plugin-disable and cancellation
+lifecycle. Its supplier must use immutable snapshots or non-game resources, not live entities or blocks.
+
+```java
+scheduler.callAsync(() -> parseSavedData(bytes))
+        .thenAccept(data -> scheduler.runForEntity(player, () -> applySavedData(player, data), null));
+```
+
 A non-async continuation can run on the completing entity, region, global, or shutdown thread. If the
 future has already completed, it can run on the thread attaching the continuation. An async continuation
 without an explicit executor normally uses the common pool. None of these continuations establishes

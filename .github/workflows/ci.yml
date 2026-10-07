@@ -89,7 +89,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/folia-libs
           key: server-${{ matrix.server }}-${{ matrix.minecraft }}
